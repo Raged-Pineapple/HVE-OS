@@ -1,0 +1,62 @@
+﻿[
+  {
+    "investor": "Mark Suster",
+    "parent": "None",
+    "subsidiary": "Remento",
+    "target": "None"
+  },
+  {
+    "investor": "Mark Suster",
+    "parent": "None",
+    "subsidiary": "JEH Aerospace",
+    "target": "Lockheed Martin"
+  },
+  {
+    "investor": "Mark Suster",
+    "parent": "None",
+    "subsidiary": "JEH Aerospace",
+    "target": "NASA"
+  },
+  {
+    "investor": "Mark Suster",
+    "parent": "DataVision",
+    "subsidiary": "Plotdrive",
+    "target": "Graphstar"
+  },
+  {
+    "investor": "Mark Suster",
+    "parent": "DataVision",
+    "subsidiary": "Plotdrive",
+    "target": "Plotcube"
+  },
+  {
+    "investor": "Mark Suster",
+    "parent": "Modern Animal Holdings",
+    "subsidiary": "Modern Animal",
+    "target": "Petfood Retailer"
+  },
+  {
+    "investor": "Mark Suster",
+    "parent": "Modern Animal Holdings",
+    "subsidiary": "Modern Animal",
+    "target": "Modern Pet Care"
+  },
+  {
+    "investor": "Mark Suster",
+    "parent": "GHI Ventures",
+    "subsidiary": "Safe",
+    "target": "DEF Ltd."
+  },
+  {
+    "investor": "Mark Suster",
+    "parent": "GHI Ventures",
+    "subsidiary": "Safe",
+    "target": "ABC Corp."
+  },
+  {
+    "investor": "Mark Suster",
+    "parent": "Doe Holding",
+    "subsidiary": "Invoca",
+    "target": "XYZ Ltd."
+  }
+]
