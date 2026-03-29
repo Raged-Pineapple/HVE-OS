@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  # ----------------------------------------------------------------------------
+  # Data Plane: MinIO (The Bronze Immutable Vault)
+  # ----------------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: hve-minio
+    environment:
+      MINIO_ROOT_USER: hve_admin
+      MINIO_ROOT_PASSWORD: hve_password123
+    # Start server and bind the UI console to port 9001
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"  # S3 API port
+      - "9001:9001"  # Console UI port
+    volumes:
+      - minio_data:/data
+    networks:
+      - hve-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Initializer: Automatically creates the "bronze" bucket upon boot
+  minio-init:
+    image: minio/mc
+    container_name: hve-minio-init
+    depends_on:
+      - minio
+    networks:
+      - hve-network
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Waiting for MinIO to start...';
+      sleep 5;
+      mc alias set local http://minio:9000 hve_admin hve_password123;
+      mc mb local/bronze || echo 'Bronze bucket already exists';
+      mc mb local/silver || echo 'Silver bucket already exists';
+      exit 0;
+      "
+
+  # ----------------------------------------------------------------------------
+  # Data Plane: Apache Kafka (The Shock Absorber)
+  # ----------------------------------------------------------------------------
+  kafka:
+    image: apache/kafka:latest
+    container_name: hve-kafka
+    ports:
+      - "29092:29092"
+      - "9093:9093"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://hve-kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - hve-network
+
+networks:
+  hve-network:
+    driver: bridge
+
+volumes:
+  minio_data:
+  kafka_data:
