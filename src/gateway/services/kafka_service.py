@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 # Kafka configuration
 # We default to the internal docker network port if running inside docker,
-# or localhost:29092 if running the API locally against the dockerized Kafka
-KAFKA_BROKERS = "localhost:29092"
+# or localhost:9092 if running the API locally against the dockerized Kafka
+KAFKA_BROKERS = "localhost:9092"
 RAW_TOPIC = "raw-telemetry"
 
 def delivery_report(err, msg):

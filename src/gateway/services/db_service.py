@@ -1,0 +1,346 @@
+"""
+db_service.py — PostgreSQL Connection Pool & CRUD Operations
+The "Brain" of HVE-OS. All dynamic configurations live here.
+"""
+import os
+import json
+import logging
+from contextlib import contextmanager
+from datetime import datetime
+import psycopg2
+from psycopg2.pool import ThreadedConnectionPool
+from psycopg2.extras import RealDictCursor
+
+logger = logging.getLogger(__name__)
+
+# Database configuration
+DB_CONFIG = {
+    "host": os.getenv("POSTGRES_HOST", "localhost"),
+    "port": int(os.getenv("POSTGRES_PORT", "5432")),
+    "database": os.getenv("POSTGRES_DB", "hve_control_plane"),
+    "user": os.getenv("POSTGRES_USER", "hve_admin"),
+    "password": os.getenv("POSTGRES_PASSWORD", "hve_password123"),
+}
+
+# Connection pool (lazy initialized)
+_pool = None
+
+def get_pool():
+    """Get or create the connection pool."""
+    global _pool
+    if _pool is None or _pool.closed:
+        _pool = ThreadedConnectionPool(
+            minconn=2,
+            maxconn=10,
+            **DB_CONFIG
+        )
+        logger.info("PostgreSQL connection pool created.")
+    return _pool
+
+@contextmanager
+def get_connection():
+    """Context manager for getting a pooled connection."""
+    pool = get_pool()
+    conn = pool.getconn()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
+
+@contextmanager
+def get_cursor(dict_cursor=True):
+    """Context manager for getting a cursor from a pooled connection."""
+    with get_connection() as conn:
+        cursor_factory = RealDictCursor if dict_cursor else None
+        cursor = conn.cursor(cursor_factory=cursor_factory)
+        try:
+            yield cursor
+        finally:
+            cursor.close()
+
+def close_pool():
+    """Close the connection pool gracefully."""
+    global _pool
+    if _pool and not _pool.closed:
+        _pool.closeall()
+        logger.info("PostgreSQL connection pool closed.")
+
+# ============================================================
+# SOURCE REGISTRY CRUD
+# ============================================================
+
+def register_source(source_id: str, source_type: str, protocol: str, description: str = None) -> dict:
+    """Register a new data source."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO source_registry (source_id, source_type, protocol, description)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (source_id) DO UPDATE SET
+                source_type = EXCLUDED.source_type,
+                protocol = EXCLUDED.protocol,
+                description = EXCLUDED.description,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING *
+        """, (source_id, source_type, protocol, description))
+        return dict(cur.fetchone())
+
+def get_all_sources() -> list:
+    """Get all registered sources."""
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM source_registry ORDER BY created_at DESC")
+        return [dict(row) for row in cur.fetchall()]
+
+def get_source(source_id: str) -> dict:
+    """Get a single source."""
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM source_registry WHERE source_id = %s", (source_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+def update_source_status(source_id: str, status: str):
+    """Update source status."""
+    with get_cursor() as cur:
+        cur.execute("""
+            UPDATE source_registry SET status = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE source_id = %s
+        """, (status, source_id))
+
+def delete_source(source_id: str) -> bool:
+    """Delete a source (cascades to blueprints, DQ rules, API config)."""
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM source_registry WHERE source_id = %s", (source_id,))
+        return cur.rowcount > 0
+
+# ============================================================
+# API SOURCE CONFIG CRUD
+# ============================================================
+
+def save_api_config(source_id: str, config: dict) -> dict:
+    """Save or update API source configuration."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO api_source_configs 
+                (source_id, api_url, method, headers, body_template, 
+                 poll_interval_seconds, auth_type, auth_credentials, is_polling,
+                 extraction_path)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (source_id) DO UPDATE SET
+                api_url = EXCLUDED.api_url,
+                method = EXCLUDED.method,
+                headers = EXCLUDED.headers,
+                body_template = EXCLUDED.body_template,
+                poll_interval_seconds = EXCLUDED.poll_interval_seconds,
+                auth_type = EXCLUDED.auth_type,
+                auth_credentials = EXCLUDED.auth_credentials,
+                is_polling = EXCLUDED.is_polling,
+                extraction_path = EXCLUDED.extraction_path
+            RETURNING *
+        """, (
+            source_id,
+            config["api_url"],
+            config.get("method", "GET"),
+            json.dumps(config.get("headers", {})),
+            json.dumps(config.get("body_template")) if config.get("body_template") else None,
+            config.get("poll_interval_seconds", 60),
+            config.get("auth_type", "NONE"),
+            json.dumps(config.get("auth_credentials", {})),
+            config.get("is_polling", True),
+            config.get("extraction_path"),  # NEW: store array extraction path
+        ))
+        return dict(cur.fetchone())
+
+
+def get_api_config(source_id: str) -> dict:
+    """Get API config for a source."""
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM api_source_configs WHERE source_id = %s", (source_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+def get_active_api_sources() -> list:
+    """Get all sources with polling enabled."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT a.*, s.status FROM api_source_configs a
+            JOIN source_registry s ON a.source_id = s.source_id
+            WHERE a.is_polling = TRUE AND s.status = 'ACTIVE'
+        """)
+        return [dict(row) for row in cur.fetchall()]
+
+def update_poll_status(source_id: str, status: str, error: str = None):
+    """Update last polled status."""
+    with get_cursor() as cur:
+        cur.execute("""
+            UPDATE api_source_configs 
+            SET last_polled_at = CURRENT_TIMESTAMP, last_status = %s, last_error = %s
+            WHERE source_id = %s
+        """, (status, error, source_id))
+
+# ============================================================
+# MAPPING BLUEPRINTS CRUD
+# ============================================================
+
+def add_blueprint(source_id: str, target_field: str, json_path: str, 
+                  data_type: str, is_primary_key: bool = False, 
+                  is_required: bool = True, default_value: str = None) -> dict:
+    """Add a mapping blueprint for a source."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO mapping_blueprints 
+                (source_id, target_field, json_path, data_type, is_primary_key, is_required, default_value)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING *
+        """, (source_id, target_field, json_path, data_type, is_primary_key, is_required, default_value))
+        return dict(cur.fetchone())
+
+def get_blueprints(source_id: str) -> list:
+    """Get all mapping blueprints for a source."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT * FROM mapping_blueprints 
+            WHERE source_id = %s ORDER BY blueprint_id
+        """, (source_id,))
+        return [dict(row) for row in cur.fetchall()]
+
+def delete_blueprints(source_id: str) -> int:
+    """Delete all blueprints for a source."""
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM mapping_blueprints WHERE source_id = %s", (source_id,))
+        return cur.rowcount
+
+def upsert_blueprints(source_id: str, blueprints: list) -> list:
+    """Replace all blueprints for a source with new ones."""
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM mapping_blueprints WHERE source_id = %s", (source_id,))
+        results = []
+        for bp in blueprints:
+            cur.execute("""
+                INSERT INTO mapping_blueprints 
+                    (source_id, target_field, json_path, data_type, is_primary_key, is_required, default_value)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+            """, (
+                source_id, bp["target_field"], bp["json_path"], bp["data_type"],
+                bp.get("is_primary_key", False), bp.get("is_required", True), bp.get("default_value")
+            ))
+            results.append(dict(cur.fetchone()))
+        return results
+
+# ============================================================
+# DQ RULES CRUD
+# ============================================================
+
+def add_dq_rule(source_id: str, rule_name: str, rule_logic: str, 
+                action_on_fail: str = "QUARANTINE", severity: str = "ERROR") -> dict:
+    """Add a data quality rule."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO dq_rules (source_id, rule_name, rule_logic, action_on_fail, severity)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING *
+        """, (source_id, rule_name, rule_logic, action_on_fail, severity))
+        return dict(cur.fetchone())
+
+def get_dq_rules(source_id: str, active_only: bool = True) -> list:
+    """Get DQ rules for a source."""
+    with get_cursor() as cur:
+        query = "SELECT * FROM dq_rules WHERE source_id = %s"
+        if active_only:
+            query += " AND is_active = TRUE"
+        query += " ORDER BY rule_id"
+        cur.execute(query, (source_id,))
+        return [dict(row) for row in cur.fetchall()]
+
+def delete_dq_rules(source_id: str) -> int:
+    """Delete all DQ rules for a source."""
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM dq_rules WHERE source_id = %s", (source_id,))
+        return cur.rowcount
+
+# ============================================================
+# SILVER REGISTRY CRUD
+# ============================================================
+
+def register_silver_table(table_name: str, source_id: str, minio_path: str,
+                          row_count: int = 0, file_count: int = 0, 
+                          total_size: int = 0, schema_json: dict = None) -> dict:
+    """Register or update a Silver table."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO silver_registry 
+                (table_name, source_id, minio_path, row_count, file_count, total_size_bytes, schema_json)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (table_name) DO UPDATE SET
+                row_count = silver_registry.row_count + EXCLUDED.row_count,
+                file_count = silver_registry.file_count + EXCLUDED.file_count,
+                total_size_bytes = silver_registry.total_size_bytes + EXCLUDED.total_size_bytes,
+                schema_json = COALESCE(EXCLUDED.schema_json, silver_registry.schema_json),
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING *
+        """, (table_name, source_id, minio_path, row_count, file_count, total_size, 
+              json.dumps(schema_json) if schema_json else None))
+        return dict(cur.fetchone())
+
+def get_silver_tables() -> list:
+    """Get all Silver tables."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT sr.*, s.description as source_description
+            FROM silver_registry sr
+            LEFT JOIN source_registry s ON sr.source_id = s.source_id
+            ORDER BY sr.updated_at DESC
+        """)
+        return [dict(row) for row in cur.fetchall()]
+
+def get_silver_table(table_name: str) -> dict:
+    """Get a single Silver table's info."""
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM silver_registry WHERE table_name = %s", (table_name,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+# ============================================================
+# QUARANTINE LOG
+# ============================================================
+
+def log_quarantine(source_id: str, rule_id: int, rule_name: str, 
+                   failed_record: dict, failure_reason: str):
+    """Log a quarantined record."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO dq_quarantine_log 
+                (source_id, rule_id, rule_name, failed_record, failure_reason)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (source_id, rule_id, rule_name, json.dumps(failed_record), failure_reason))
+
+# ============================================================
+# PROCESSING LOG
+# ============================================================
+
+def log_processing_start(source_id: str, processor_type: str, bronze_path: str = None) -> int:
+    """Log the start of a processing run. Returns log_id."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO processing_log (source_id, processor_type, bronze_path)
+            VALUES (%s, %s, %s)
+            RETURNING log_id
+        """, (source_id, processor_type, bronze_path))
+        return cur.fetchone()["log_id"]
+
+def log_processing_complete(log_id: int, silver_path: str, records_in: int,
+                            records_passed: int, records_quarantined: int,
+                            status: str = "COMPLETED", error_message: str = None):
+    """Log the completion of a processing run."""
+    with get_cursor() as cur:
+        cur.execute("""
+            UPDATE processing_log SET
+                silver_path = %s, records_in = %s, records_passed = %s,
+                records_quarantined = %s, status = %s, error_message = %s,
+                completed_at = CURRENT_TIMESTAMP
+            WHERE log_id = %s
+        """, (silver_path, records_in, records_passed, records_quarantined,
+              status, error_message, log_id))

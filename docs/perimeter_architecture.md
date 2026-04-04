@@ -32,6 +32,29 @@ When IoT sensors, Flight telemetry, or external APIs stream thousands of JSON ev
 - *Wait, why not MinIO too?*: To preserve maximum API throughput, the API does *not* write real-time streams to MinIO. The event lives resiliently on Kafka. Downstream bulk-consumers (like Apache Flink) will pull from this Kafka buffer.
 - *Impact*: Kafka handles backpressure and traffic spikes effortlessly. The API acts as a pure, hyper-fast "Shock Absorber."
 
+## Testing with the Universal CLI
+
+To test the Perimeter with any custom data, use the `scripts/hve_ingest.py` utility. This tool demonstrates the "Capture & Shield" architecture without any hardcoded logic.
+
+### 1. Ingesting Real-time Streams
+You can pipe any JSON from your custom APIs into the HVE stream.
+```powershell
+python scripts/hve_ingest.py stream --source "my_custom_api" --data '{"key": "value", "telemetry": 123}'
+```
+Or, if you have your API output saved to a file:
+```powershell
+python scripts/hve_ingest.py stream --source "opensky_data" --file "my_api_response.json"
+```
+
+### 2. Dropping Massive Static Files (Batch)
+This command demonstrates the direct-to-MinIO memory bypass.
+```powershell
+python scripts/hve_ingest.py batch --source "historical_dump" --path "C:/path/to/my_huge_file.csv"
+```
+The HVE Perimeter will fetch a Pre-Signed URL and the script will stream the bytes directly to MinIO, ensuring the API server remains crash-proof.
+
+---
+
 ## Infrastructure Services
 * **MinIO (Ports 9000 & 9001):** The physically immutable "Bronze" hard drives.
 * **Apache Kafka (Port 9092):** The stream buffer running in Zookeeper-less KRaft Mode.

@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+*.so
+
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# Environment & Secrets
+.env
+*.env
+credentials.json
+
+# Test artifacts
+test_flights.csv
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# MinIO / Kafka local data (from Docker volumes)
+kafka_data/
+minio_data/
+postgres_data/

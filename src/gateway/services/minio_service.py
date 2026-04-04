@@ -1,12 +1,27 @@
+"""
+minio_service.py — MinIO Object Storage Service
+Handles Pre-Signed URLs, Bronze writes, Silver writes, and S3-compatible operations.
+"""
 import os
-from datetime import timedelta
+import io
+import gzip
+import json
+import logging
+from datetime import timedelta, datetime
 from minio import Minio
 from minio.error import S3Error
 
-# Ensure environment variables or fallbacks
+logger = logging.getLogger(__name__)
+
+# MinIO Configuration
 MINIO_URL = os.getenv("MINIO_URL", "localhost:9000")
 MINIO_USER = os.getenv("MINIO_ROOT_USER", "hve_admin")
 MINIO_PASS = os.getenv("MINIO_ROOT_PASSWORD", "hve_password123")
+
+# Bucket names
+BRONZE_BUCKET = "hve-bronze"
+SILVER_BUCKET = "hve-silver"
+DLQ_BUCKET = "hve-dlq"
 
 # Initialize client
 minio_client = Minio(
@@ -16,25 +31,196 @@ minio_client = Minio(
     secure=False  # Development environment
 )
 
+def ensure_buckets():
+    """Create required buckets if they don't exist."""
+    for bucket in [BRONZE_BUCKET, SILVER_BUCKET, DLQ_BUCKET]:
+        try:
+            if not minio_client.bucket_exists(bucket):
+                minio_client.make_bucket(bucket)
+                logger.info(f"Created bucket: {bucket}")
+        except S3Error as e:
+            logger.warning(f"Bucket check/create for {bucket}: {e}")
+
+
+# ============================================================
+# PRE-SIGNED URL (Stage 1: Batch Upload Bypass)
+# ============================================================
+
 def generate_presigned_upload_url(source_id: str, filename: str) -> dict:
     """
     Generates a Pre-Signed URL for uploading directly to MinIO,
     entirely bypassing the API Gateway memory overhead.
     """
-    bucket_name = "bronze"
     target_path = f"batch/{source_id}/{filename}"
     expiration = timedelta(hours=1)
     
     try:
         url = minio_client.presigned_put_object(
-            bucket_name,
+            BRONZE_BUCKET,
             target_path,
             expires=expiration,
         )
         return {
             "upload_url": url,
-            "target_path": f"{bucket_name}/{target_path}",
+            "target_path": f"{BRONZE_BUCKET}/{target_path}",
             "expires_in_seconds": int(expiration.total_seconds())
         }
     except S3Error as e:
-        raise Exception(f"Failed to generate Minio Pre-Signed URL: {e}")
+        raise Exception(f"Failed to generate MinIO Pre-Signed URL: {e}")
+
+
+# ============================================================
+# BRONZE WRITES (Stage 2: Immutable Vault)
+# ============================================================
+
+def write_bronze_jsonl(source_id: str, records: list, batch_id: str) -> str:
+    """
+    Write a batch of JSON records as a compressed JSONL file to Bronze.
+    Returns the MinIO object path.
+    """
+    now = datetime.utcnow()
+    object_path = (
+        f"streams/{source_id}/"
+        f"year={now.year}/month={now.month:02d}/day={now.day:02d}/"
+        f"{batch_id}.jsonl.gz"
+    )
+    
+    # Build JSONL content
+    lines = [json.dumps(record) + "\n" for record in records]
+    content = "".join(lines).encode("utf-8")
+    
+    # Compress
+    compressed = gzip.compress(content)
+    data = io.BytesIO(compressed)
+    
+    try:
+        minio_client.put_object(
+            BRONZE_BUCKET,
+            object_path,
+            data,
+            length=len(compressed),
+            content_type="application/gzip"
+        )
+        logger.info(f"Bronze write: {BRONZE_BUCKET}/{object_path} ({len(records)} records)")
+        return f"{BRONZE_BUCKET}/{object_path}"
+    except S3Error as e:
+        logger.error(f"Failed to write to Bronze: {e}")
+        raise
+
+
+def write_bronze_file(source_id: str, filename: str, file_data: bytes, content_type: str) -> str:
+    """
+    Write a static file directly to Bronze.
+    Used for the upload-static endpoint.
+    """
+    now = datetime.utcnow()
+    object_path = (
+        f"batch/{source_id}/"
+        f"year={now.year}/month={now.month:02d}/day={now.day:02d}/"
+        f"{filename}"
+    )
+    
+    data = io.BytesIO(file_data)
+    try:
+        minio_client.put_object(
+            BRONZE_BUCKET,
+            object_path,
+            data,
+            length=len(file_data),
+            content_type=content_type
+        )
+        logger.info(f"Bronze file write: {BRONZE_BUCKET}/{object_path} ({len(file_data)} bytes)")
+        return object_path
+    except S3Error as e:
+        logger.error(f"Failed to write file to Bronze: {e}")
+        raise
+
+
+# ============================================================
+# SILVER WRITES (Stage 5: Clean Tables)
+# ============================================================
+
+def write_silver_parquet(source_id: str, parquet_bytes: bytes, batch_id: str) -> tuple:
+    """
+    Write a Parquet file to the Silver bucket.
+    Returns (object_path, file_size).
+    """
+    object_path = f"{source_id}/{batch_id}.parquet"
+    data = io.BytesIO(parquet_bytes)
+    
+    try:
+        minio_client.put_object(
+            SILVER_BUCKET,
+            object_path,
+            data,
+            length=len(parquet_bytes),
+            content_type="application/octet-stream"
+        )
+        logger.info(f"Silver write: {SILVER_BUCKET}/{object_path} ({len(parquet_bytes)} bytes)")
+        return object_path, len(parquet_bytes)
+    except S3Error as e:
+        logger.error(f"Failed to write to Silver: {e}")
+        raise
+
+
+# ============================================================
+# DLQ WRITES (Stage 4: Quarantine)
+# ============================================================
+
+def write_dlq(source_id: str, failed_records: list, batch_id: str) -> str:
+    """Write quarantined records to the DLQ bucket."""
+    object_path = f"{source_id}/{batch_id}.jsonl"
+    content = "\n".join(json.dumps(r) for r in failed_records).encode("utf-8")
+    data = io.BytesIO(content)
+    
+    try:
+        minio_client.put_object(
+            DLQ_BUCKET,
+            object_path,
+            data,
+            length=len(content),
+            content_type="application/jsonlines"
+        )
+        logger.info(f"DLQ write: {DLQ_BUCKET}/{object_path} ({len(failed_records)} records)")
+        return f"{DLQ_BUCKET}/{object_path}"
+    except S3Error as e:
+        logger.error(f"Failed to write to DLQ: {e}")
+        raise
+
+
+# ============================================================
+# READ OPERATIONS
+# ============================================================
+
+def read_object(bucket: str, object_path: str) -> bytes:
+    """Read an object from MinIO and return its bytes."""
+    try:
+        response = minio_client.get_object(bucket, object_path)
+        data = response.read()
+        response.close()
+        response.release_conn()
+        return data
+    except S3Error as e:
+        logger.error(f"Failed to read {bucket}/{object_path}: {e}")
+        raise
+
+
+def list_objects(bucket: str, prefix: str = "", recursive: bool = True) -> list:
+    """List objects in a bucket with optional prefix filter."""
+    try:
+        objects = minio_client.list_objects(bucket, prefix=prefix, recursive=recursive)
+        return [{"name": obj.object_name, "size": obj.size, "last_modified": str(obj.last_modified)} 
+                for obj in objects]
+    except S3Error as e:
+        logger.error(f"Failed to list objects in {bucket}: {e}")
+        raise
+
+
+def list_silver_parquet_files(source_id: str) -> list:
+    """List all Parquet files in Silver for a given source."""
+    try:
+        objects = minio_client.list_objects(SILVER_BUCKET, prefix=f"{source_id}/", recursive=True)
+        return [obj.object_name for obj in objects if obj.object_name.endswith(".parquet")]
+    except S3Error as e:
+        logger.error(f"Failed to list Silver files for {source_id}: {e}")
+        return []

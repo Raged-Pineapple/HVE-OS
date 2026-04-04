@@ -4,3 +4,11 @@ minio
 confluent-kafka
 pydantic
 python-dotenv
+requests
+psycopg2-binary
+pyarrow
+pandas
+openpyxl
+duckdb
+aiohttp
+python-multipart

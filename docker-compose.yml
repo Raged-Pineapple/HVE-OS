@@ -1,73 +1,102 @@
 version: '3.8'
 
 services:
-  # ----------------------------------------------------------------------------
-  # Data Plane: MinIO (The Bronze Immutable Vault)
-  # ----------------------------------------------------------------------------
+  # ==========================================
+  # CONTROL PLANE (THE BRAIN)
+  # ==========================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: hve-postgres
+    environment:
+      POSTGRES_USER: hve_admin
+      POSTGRES_PASSWORD: hve_password123
+      POSTGRES_DB: hve_control_plane
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Mounts the init script to automatically run on first boot
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - hve-network
+
+  # ==========================================
+  # DATA PLANE (THE MUSCLE) - STORAGE
+  # ==========================================
   minio:
     image: minio/minio:latest
     container_name: hve-minio
     environment:
       MINIO_ROOT_USER: hve_admin
       MINIO_ROOT_PASSWORD: hve_password123
-    # Start server and bind the UI console to port 9001
-    command: server /data --console-address ":9001"
     ports:
-      - "9000:9000"  # S3 API port
-      - "9001:9001"  # Console UI port
+      - "9000:9000" # API Port
+      - "9001:9001" # Console Port
+    command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
     networks:
       - hve-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
 
-  # Initializer: Automatically creates the "bronze" bucket upon boot
+  # Sidecar to auto-create Bronze and Silver buckets
   minio-init:
-    image: minio/mc
+    image: minio/mc:latest
     container_name: hve-minio-init
     depends_on:
       - minio
-    networks:
-      - hve-network
     entrypoint: >
       /bin/sh -c "
-      echo 'Waiting for MinIO to start...';
       sleep 5;
       mc alias set local http://minio:9000 hve_admin hve_password123;
-      mc mb local/bronze || echo 'Bronze bucket already exists';
-      mc mb local/silver || echo 'Silver bucket already exists';
+      mc mb local/hve-bronze || true;
+      mc mb local/hve-silver || true;
+      mc anonymous set none local/hve-bronze;
+      mc anonymous set none local/hve-silver;
       exit 0;
       "
+    networks:
+      - hve-network
 
-  # ----------------------------------------------------------------------------
-  # Data Plane: Apache Kafka (The Shock Absorber)
-  # ----------------------------------------------------------------------------
+  # ==========================================
+  # DATA PLANE (THE MUSCLE) - STREAMING
+  # ==========================================
   kafka:
     image: apache/kafka:latest
     container_name: hve-kafka
-    ports:
-      - "29092:29092"
-      - "9093:9093"
     environment:
+      # KRaft configuration for Apache Official Image
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:29092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://hve-kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    ports:
+      - "9092:9092"
     volumes:
       - kafka_data:/var/lib/kafka/data
+    networks:
+      - hve-network
+
+  # Sidecar to auto-create the raw-telemetry topic
+  kafka-init:
+    image: apache/kafka:latest
+    container_name: hve-kafka-init
+    depends_on:
+      - kafka
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Waiting for Kafka to be ready...';
+      sleep 15;
+      /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --config retention.ms=604800000 --topic raw-telemetry;
+      echo 'Topic raw-telemetry created with 3 partitions and 7-day retention.';
+      "
     networks:
       - hve-network
 
@@ -76,5 +105,6 @@ networks:
     driver: bridge
 
 volumes:
+  postgres_data:
   minio_data:
   kafka_data:
