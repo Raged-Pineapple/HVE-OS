@@ -91,20 +91,20 @@ class SourceInfo(BaseModel):
 
 class APISourceConfig(BaseModel):
     """Configuration for an external API to poll."""
-    source_id: str = Field(..., description="Source ID (will be auto-registered)")
-    api_url: str = Field(..., description="Full URL of the API endpoint to poll")
-    method: str = Field("GET", description="HTTP method")
-    headers: Dict[str, str] = Field(default_factory=dict, description="Custom HTTP headers")
-    body_template: Optional[Dict[str, Any]] = Field(None, description="Request body for POST APIs")
-    poll_interval_seconds: int = Field(60, description="Polling interval in seconds", ge=5, le=86400)
-    auth_type: AuthType = Field(AuthType.NONE, description="Authentication type")
-    auth_credentials: Dict[str, str] = Field(default_factory=dict, description="Auth credentials")
+    source_id: str = Field(..., description="The unique name for this data stream. Will be used as the Iceberg table name.", examples=["context_military_bases"])
+    api_url: str = Field(..., description="Full URL of the external REST API endpoint to poll.", examples=["https://overpass-api.de/api/interpreter?data=[out:json];node(50.745,7.17,50.75,7.18);out;"])
+    method: str = Field("GET", description="HTTP method to use when reaching the external API.", examples=["GET", "POST"])
+    headers: Dict[str, str] = Field(default_factory=dict, description="Custom HTTP headers to attach to the request.", examples=[{"Accept": "application/json"}])
+    body_template: Optional[Dict[str, Any]] = Field(None, description="Request body payload for POST/PUT APIs.", examples=[{"query": "example"}])
+    poll_interval_seconds: int = Field(60, description="How often HVE-OS should wake up and hit this API (in seconds).", ge=5, le=86400, examples=[86400])
+    auth_type: AuthType = Field(AuthType.NONE, description="Authentication mechanism for the external API.", examples=["NONE"])
+    auth_credentials: Dict[str, str] = Field(default_factory=dict, description="Auth credentials (e.g., tokens, passwords).", examples=[{}])
     extraction_path: Optional[str] = Field(
         None,
-        description="JSONPath key for array extraction (e.g. '$.states' for OpenSky, '$.articles' for NewsAPI). "
-                    "When set, each item in the array becomes its own Kafka message (Array Explosion)."
+        description="JSONPath key to tell HVE-OS how to extract arrays from heavily nested JSON responses. When set, each item in the array becomes its own independent row in the Lakehouse.",
+        examples=["$.elements"]
     )
-    description: Optional[str] = Field(None, description="Human-readable description")
+    description: Optional[str] = Field(None, description="Human-readable description of what this poller does.", examples=["Daily pull of Military Bases"])
 
 
 # ============================================================
@@ -113,12 +113,12 @@ class APISourceConfig(BaseModel):
 
 class MappingBlueprintCreate(BaseModel):
     """Create a mapping blueprint for dynamic data extraction."""
-    target_field: str = Field(..., description="Target column name in Silver table")
-    json_path: str = Field(..., description="JSONPath expression to extract value (e.g., '$.states[*][0]')")
-    data_type: str = Field("STRING", description="Target data type (STRING, INT, FLOAT, BOOLEAN, TIMESTAMP)")
-    is_primary_key: bool = Field(False, description="Is this field a primary key?")
-    is_required: bool = Field(True, description="Is this field required (non-null)?")
-    default_value: Optional[str] = Field(None, description="Default value if extraction returns null")
+    target_field: str = Field(..., description="Target column name that will be created in your clean Silver Iceberg table.", examples=["latitude"])
+    json_path: str = Field(..., description="JSONPath expression to hunt down the value inside the messy raw payload.", examples=["$.center.lat", "$.tags.name"])
+    data_type: str = Field("STRING", description="Target native database type (STRING, INT, FLOAT, BOOLEAN, TIMESTAMP, BIGINT).", examples=["FLOAT"])
+    is_primary_key: bool = Field(False, description="Set to true if this field uniquely identifies the row.", examples=[False])
+    is_required: bool = Field(True, description="If true, records missing this extraction will be instantly rejected from the pipeline.", examples=[True])
+    default_value: Optional[str] = Field(None, description="Fallback value if the extraction path returns null.", examples=["Unknown"])
 
 class MappingBlueprintInfo(BaseModel):
     """Response model for a mapping blueprint."""
@@ -138,10 +138,10 @@ class MappingBlueprintInfo(BaseModel):
 
 class DQRuleCreate(BaseModel):
     """Create a data quality rule."""
-    rule_name: str = Field(..., description="Human-readable rule name")
-    rule_logic: str = Field(..., description="Python expression evaluated per row (e.g., 'altitude >= 0')")
-    action_on_fail: DQAction = Field(DQAction.QUARANTINE, description="Action when rule fails")
-    severity: DQSeverity = Field(DQSeverity.ERROR, description="Severity level")
+    rule_name: str = Field(..., description="Human-readable name explaining what this filter does.", examples=["Strictly Military Bases"])
+    rule_logic: str = Field(..., description="Pure Python expression evaluated against the structured row. Any columns extracted in the Blueprints are directly accessible here.", examples=["category == 'base' and base_name is not None"])
+    action_on_fail: DQAction = Field(DQAction.QUARANTINE, description="Action taken when the Python rule evaluates to False.", examples=["QUARANTINE"])
+    severity: DQSeverity = Field(DQSeverity.ERROR, description="Severity level flag.", examples=["ERROR"])
 
 class DQRuleInfo(BaseModel):
     """Response model for a DQ rule."""
@@ -160,8 +160,20 @@ class DQRuleInfo(BaseModel):
 
 class QueryRequest(BaseModel):
     """SQL query request against Silver tables."""
-    sql: str = Field(..., description="SQL query to execute against Silver layer")
-    limit: int = Field(1000, description="Maximum rows to return", ge=1, le=100000)
+    sql: str = Field(..., description="DuckDB SQL query to execute against the Lakehouse. Table names correspond mathematically to your source IDs.", examples=["SELECT base_id, base_name, latitude, longitude FROM context_military_bases_v2 LIMIT 10"])
+    limit: int = Field(1000, description="Safety limit on rows returned.", ge=1, le=100000, examples=[100])
+
+class TimeTravelQueryRequest(BaseModel):
+    """Request payload for Iceberg time-travel query."""
+    sql: str = Field(..., description="DuckDB SQL query string (e.g. SELECT * FROM table_name)", examples=["SELECT * FROM context_military_bases_v2"])
+    snapshot_id: Optional[int] = Field(None, description="Read data exactly as it was at this specific Iceberg snapshot ID.", examples=[6480482424800937643])
+    limit: Optional[int] = Field(50, description="Max rows to return", examples=[10])
+
+class SnapshotInfo(BaseModel):
+    """Information about an Iceberg table snapshot."""
+    snapshot_id: int
+    timestamp_ms: int
+    committed_at: str
 
 class QueryResponse(BaseModel):
     """Response model for SQL queries."""
@@ -172,6 +184,8 @@ class QueryResponse(BaseModel):
 
 class SilverTableInfo(BaseModel):
     """Information about a Silver table."""
+    model_config = {"protected_namespaces": ()}  # Suppress schema_json warning
+    
     table_name: str
     source_id: Optional[str]
     minio_path: str

@@ -12,7 +12,7 @@ import logging
 import tempfile
 import duckdb
 
-from services import db_service, minio_service
+from services import db_service, minio_service, iceberg_service
 from services.minio_service import SILVER_BUCKET, MINIO_URL, MINIO_USER, MINIO_PASS, minio_client
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,19 @@ def _refresh_tables():
     for table_info in silver_tables:
         table_name = table_info["table_name"]
         
+        try:
+            # ── TRY ICEBERG FIRST ──
+            arrow_table = iceberg_service.scan_latest(table_name)
+            conn.execute(f"DROP TABLE IF EXISTS \"{table_name}\"")
+            conn.execute(f"CREATE TABLE \"{table_name}\" AS SELECT * FROM arrow_table")
+            _registered_tables.add(table_name)
+            logger.info(f"Registered DuckDB table from Iceberg: {table_name} ({arrow_table.num_rows} rows)")
+            continue  # Skip Parquet fallback
+        except Exception as ie:
+            logger.debug(f"Not an Iceberg table or load failed for {table_name}: {ie}. Falling back to Parquet.")
+            pass
+
+        # ── LEGACY PARQUET FALLBACK ──
         # List all parquet files for this source in Silver
         parquet_files = minio_service.list_silver_parquet_files(table_name)
         
@@ -130,6 +143,66 @@ def execute_query(sql: str, limit: int = 1000) -> dict:
     except Exception as e:
         logger.error(f"Query execution failed: {e}")
         raise ValueError(f"Query failed: {str(e)}")
+
+
+def execute_time_travel_query(sql: str, snapshot_id: int, limit: int = 1000) -> dict:
+    """Execute SQL exactly as it was at a specific Iceberg snapshot_id."""
+    start_time = time.time()
+    conn = get_connection()
+    
+    # We need to find which table to load. Basic inference from FROM clause or just load all related sources at that snapshot.
+    # A robust way is scanning text for table names from silver_registry, but for simplicity let's rely on the user to use "FROM <table>".
+    silver_tables = db_service.get_silver_tables()
+    for t in silver_tables:
+        table_name = t["table_name"]
+        if table_name.lower() in sql.lower():
+            try:
+                arrow_table = iceberg_service.scan_as_of(table_name, snapshot_id)
+                # Register as a temporary snapshot table to avoid polluting the latest
+                tmp_name = f"{table_name}_snap_{snapshot_id}"
+                conn.execute(f"DROP TABLE IF EXISTS \"{tmp_name}\"")
+                conn.execute(f"CREATE TABLE \"{tmp_name}\" AS SELECT * FROM arrow_table")
+                # Mutate SQL to use the temp table
+                sql = sql.replace(table_name, f"\"{tmp_name}\"")
+            except Exception as e:
+                logger.error(f"Failed to load snapshot {snapshot_id} for table {table_name}: {e}")
+
+    # Apply limit
+    sql_clean = sql.strip().rstrip(';')
+    if "LIMIT" not in sql_clean.upper():
+        sql_clean = f"{sql_clean} LIMIT {limit}"
+    
+    try:
+        result = conn.execute(sql_clean)
+        columns = [desc[0] for desc in result.description]
+        rows = result.fetchall()
+        
+        row_dicts = []
+        for row in rows:
+            row_dict = {}
+            for i, col in enumerate(columns):
+                val = row[i]
+                if hasattr(val, 'isoformat'):
+                    val = val.isoformat()
+                elif isinstance(val, bytes):
+                    val = val.decode('utf-8', errors='replace')
+                elif val is not None and not isinstance(val, (str, int, float, bool)):
+                    val = str(val)
+                row_dict[col] = val
+            row_dicts.append(row_dict)
+            
+        execution_time = (time.time() - start_time) * 1000
+        return {
+            "columns": columns,
+            "rows": row_dicts,
+            "row_count": len(row_dicts),
+            "execution_time_ms": round(execution_time, 2)
+        }
+    except Exception as e:
+        logger.error(f"Time travel query execution failed: {e}")
+        raise ValueError(f"Time travel query failed: {str(e)}")
+
+
 
 
 def get_table_info() -> list:

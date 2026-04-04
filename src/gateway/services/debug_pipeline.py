@@ -16,7 +16,7 @@ import pyarrow.parquet as pq
 from models import (
     CanonicalEnvelope, StageTrace, StageStatus, PipelineTrace
 )
-from services import db_service, minio_service
+from services import db_service, minio_service, iceberg_service
 from services.minio_service import BRONZE_BUCKET, SILVER_BUCKET
 from services.kafka_service import producer, RAW_TOPIC, delivery_report
 
@@ -271,52 +271,24 @@ class DebugPipeline:
             batch_id = self.trace_id[:12]
             row = self._clean_rows[0]
 
-            # Build PyArrow table
-            schema_info = {}
-            arrays = {}
-            for col, val in row.items():
-                if isinstance(val, bool):
-                    arrays[col] = pa.array([val], type=pa.bool_())
-                    schema_info[col] = "BOOLEAN"
-                elif isinstance(val, int):
-                    arrays[col] = pa.array([val], type=pa.int64())
-                    schema_info[col] = "INT64"
-                elif isinstance(val, float):
-                    arrays[col] = pa.array([val], type=pa.float64())
-                    schema_info[col] = "FLOAT64"
-                else:
-                    arrays[col] = pa.array([str(val) if val is not None else None], type=pa.string())
-                    schema_info[col] = "STRING"
+            # Write to Iceberg
+            metrics = iceberg_service.append_records(self.source_id, [row], batch_id)
+            snapshot_id = metrics.get('snapshot_id')
 
-            table = pa.table(arrays)
-            sink = pa.BufferOutputStream()
-            pq.write_table(table, sink, compression="snappy")
-            parquet_bytes = sink.getvalue().to_pybytes()
+            silver_path = f"s3a://hve-iceberg/{self.source_id} (Snapshot {snapshot_id})"
 
-            silver_path, file_size = minio_service.write_silver_parquet(
-                self.source_id, parquet_bytes, batch_id
-            )
-
-            # Update Silver registry
-            db_service.register_silver_table(
-                table_name=self.source_id,
-                source_id=self.source_id,
-                minio_path=f"{SILVER_BUCKET}/{self.source_id}/",
-                row_count=1,
-                file_count=1,
-                total_size=file_size,
-                schema_json=schema_info
-            )
+            # Build dummy schema for reporting
+            schema_info = {k: "STRING" for k in row.keys()} 
 
             self.stages["stage_5_silver"] = StageTrace(
                 status=StageStatus.PASSED,
                 duration_ms=round((time.time() - t) * 1000, 2),
                 detail={
                     "path": silver_path,
-                    "bucket": SILVER_BUCKET,
-                    "size_bytes": file_size,
+                    "bucket": "hve-iceberg",
+                    "size_bytes": 0,
                     "rows_written": 1,
-                    "format": "Parquet (Snappy compressed)",
+                    "format": "Iceberg",
                     "schema": schema_info
                 }
             )

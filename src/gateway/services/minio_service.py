@@ -224,3 +224,44 @@ def list_silver_parquet_files(source_id: str) -> list:
     except S3Error as e:
         logger.error(f"Failed to list Silver files for {source_id}: {e}")
         return []
+
+
+# ============================================================
+# SMART PEEK OPERATIONS
+# ============================================================
+
+def peek_latest_objects(bucket: str, source_id: str, limit: int = 5) -> list:
+    """
+    Finds the latest objects for a source and returns their raw records.
+    Handles compression (.gz) and format (.jsonl).
+    """
+    try:
+        # 1. Find latest files
+        prefix = f"streams/{source_id}/" if bucket == BRONZE_BUCKET else f"{source_id}/"
+        objects = minio_client.list_objects(bucket, prefix=prefix, recursive=True)
+        
+        # Sort by last_modified descending
+        sorted_objs = sorted(objects, key=lambda x: x.last_modified, reverse=True)
+        if not sorted_objs:
+            return []
+            
+        records = []
+        for obj in sorted_objs:
+            # 2. Read object
+            data = read_object(bucket, obj.object_name)
+            
+            # 3. Decompress if needed
+            if obj.object_name.endswith(".gz"):
+                data = gzip.decompress(data)
+                
+            # 4. Parse JSONL
+            content = data.decode("utf-8")
+            for line in content.splitlines():
+                if line.strip():
+                    records.append(json.loads(line))
+                    if len(records) >= limit:
+                        return records
+        return records
+    except Exception as e:
+        logger.error(f"Failed to peek {bucket} for {source_id}: {e}")
+        return []

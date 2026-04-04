@@ -12,3 +12,4 @@ openpyxl
 duckdb
 aiohttp
 python-multipart
+pyiceberg[s3fs,pyarrow]>=0.7.0

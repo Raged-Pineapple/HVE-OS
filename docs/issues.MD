@@ -1,0 +1,5 @@
+1. The crash window is real. Events buffered in self._buffers but not yet flushed are gone if the process dies. With a 60-second window that's up to a minute of telemetry lost silently. The standard fix is Kafka offset management — only commit the consumer offset after the Iceberg write succeeds, not when the event is pulled off the topic. That way a crash replays the unprocessed events on restart.
+
+2. The 10k/60s thresholds are guesses until you profile. At what event rate does a 60-second window actually produce a "mathematically dense" Parquet file? If weather_api sends 5 events per minute, your 60-second flush is writing a 5-record Parquet file — the small files problem in disguise on low-volume sources. You may want per-source thresholds eventually.
+
+3. Single-process is a ceiling. stream_processor.py as a daemon is one Python process. When your Kafka topic ingestion outpaces the flush speed, the RAM buffer grows unbounded. That's fine for now but worth knowing — the escape hatch is running multiple consumer instances in the same Kafka consumer group, each owning a partition subset.

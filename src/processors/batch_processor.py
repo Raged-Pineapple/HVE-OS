@@ -22,7 +22,7 @@ for _d in [_gateway_dir, _src_dir]:
     if _d not in sys.path:
         sys.path.insert(0, _d)
 
-from services import db_service, minio_service
+from services import db_service, minio_service, iceberg_service
 from services.minio_service import BRONZE_BUCKET, SILVER_BUCKET
 
 logger = logging.getLogger(__name__)
@@ -235,22 +235,19 @@ def process_static_file(source_id: str, filename: str, file_data: bytes) -> dict
         silver_path = None
         file_size = 0
         if not clean_df.empty:
-            # Convert to Parquet bytes
-            table = pa.Table.from_pandas(clean_df, preserve_index=False)
-            sink = pa.BufferOutputStream()
-            pq.write_table(table, sink, compression='snappy')
-            parquet_bytes = sink.getvalue().to_pybytes()
-
-            silver_path, file_size = minio_service.write_silver_parquet(
-                source_id, parquet_bytes, batch_id
-            )
+            # Convert to list of dicts for Iceberg, handling NaNs
+            clean_records = clean_df.where(pd.notnull(clean_df), None).to_dict(orient='records')
+            
+            metrics = iceberg_service.append_records(source_id, clean_records, batch_id)
+            snapshot_id = metrics.get('snapshot_id')
+            silver_path = f"s3a://hve-iceberg/{source_id} (Snapshot {snapshot_id})"
 
             # Register Silver table
             schema_json = {col: str(clean_df[col].dtype) for col in clean_df.columns}
             db_service.register_silver_table(
                 table_name=source_id,
                 source_id=source_id,
-                minio_path=f"hve-silver/{source_id}/",
+                minio_path=f"hve-iceberg/{source_id}/",
                 row_count=records_passed,
                 file_count=1,
                 total_size=file_size,

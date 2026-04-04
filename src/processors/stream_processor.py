@@ -27,7 +27,7 @@ for _d in [_gateway_dir, _src_dir]:
         sys.path.insert(0, _d)
 
 from confluent_kafka import Consumer, KafkaError
-from services import db_service, minio_service
+from services import db_service, minio_service, iceberg_service
 from services.minio_service import BRONZE_BUCKET, SILVER_BUCKET
 
 logger = logging.getLogger(__name__)
@@ -161,8 +161,18 @@ class StreamProcessor:
 
             # ── Stage 4: Transform + DQ Gate ──
             if not blueprints:
-                # No blueprints → auto-generate identity mapping from payload keys
-                blueprints = self._auto_generate_blueprints(source_id, messages)
+                logger.warning(f"[{source_id}] No blueprints defined! Skipping Silver processing. Data safely stored in Bronze.")
+                if log_id:
+                    db_service.log_processing_complete(
+                        log_id=log_id,
+                        silver_path="",
+                        records_in=len(messages),
+                        records_passed=0,
+                        records_quarantined=0,
+                        status="SKIPPED",
+                        error_message="Manual Blueprint required for Silver layer processing."
+                    )
+                return
 
             clean_rows, quarantined = self._transform_and_gate(
                 source_id, messages, blueprints, dq_rules
@@ -246,29 +256,6 @@ class StreamProcessor:
             logger.warning(f"Failed to fetch DQ rules for {source_id}: {e}")
             return cached[0] if cached else []
 
-    def _auto_generate_blueprints(self, source_id: str, messages: list) -> list:
-        """Auto-generate identity mapping from the payload keys of the first message."""
-        sample = messages[0].get("payload", messages[0])
-        blueprints = []
-        for key, value in sample.items():
-            if key in ("hve_id", "source_id", "ingest_timestamp"):
-                continue
-            data_type = "STRING"
-            if isinstance(value, bool):
-                data_type = "BOOLEAN"
-            elif isinstance(value, int):
-                data_type = "INT"
-            elif isinstance(value, float):
-                data_type = "FLOAT"
-            blueprints.append({
-                "target_field": key,
-                "json_path": f"$.{key}",
-                "data_type": data_type,
-                "is_primary_key": False,
-                "is_required": False,
-            })
-        logger.info(f"[{source_id}] Auto-generated {len(blueprints)} identity blueprints")
-        return blueprints
 
     def _transform_and_gate(self, source_id: str, messages: list,
                             blueprints: list, dq_rules: list) -> tuple:
@@ -395,37 +382,19 @@ class StreamProcessor:
             return True
 
     def _write_silver(self, source_id: str, clean_rows: list, batch_id: str) -> tuple:
-        """Convert clean rows to Parquet and write to Silver."""
+        """Append clean rows to an Iceberg table in Silver."""
         if not clean_rows:
             return None, 0
 
-        # Build PyArrow table
-        columns = list(clean_rows[0].keys())
-        arrays = {}
-        for col in columns:
-            values = [row.get(col) for row in clean_rows]
-            # Infer type from first non-None value
-            sample = next((v for v in values if v is not None), None)
-            if isinstance(sample, int):
-                arrays[col] = pa.array(values, type=pa.int64())
-            elif isinstance(sample, float):
-                arrays[col] = pa.array(values, type=pa.float64())
-            elif isinstance(sample, bool):
-                arrays[col] = pa.array(values, type=pa.bool_())
-            else:
-                arrays[col] = pa.array([str(v) if v is not None else None for v in values], type=pa.string())
-
-        table = pa.table(arrays)
-        
-        # Write to bytes
-        sink = pa.BufferOutputStream()
-        pq.write_table(table, sink, compression='snappy')
-        parquet_bytes = sink.getvalue().to_pybytes()
-
-        # Upload to MinIO Silver
-        silver_path, file_size = minio_service.write_silver_parquet(source_id, parquet_bytes, batch_id)
-        logger.info(f"[{source_id}] Silver: {len(clean_rows)} rows → {silver_path}")
-        return silver_path, file_size
+        try:
+            metrics = iceberg_service.append_records(source_id, clean_rows, batch_id)
+            snapshot_id = metrics.get('snapshot_id')
+            silver_path = f"s3a://hve-iceberg/{source_id} (Snapshot {snapshot_id})"
+            logger.info(f"[{source_id}] Silver Iceberg: {metrics.get('records_added')} rows appended (Snapshot {snapshot_id})")
+            return silver_path, 0
+        except Exception as e:
+            logger.error(f"[{source_id}] Failed to write to Iceberg: {e}")
+            raise
 
 
 # Singleton instance

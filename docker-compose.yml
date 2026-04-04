@@ -21,6 +21,32 @@ services:
       - hve-network
 
   # ==========================================
+  # ICEBERG REST CATALOG
+  # ==========================================
+  iceberg-rest:
+    image: tabulario/iceberg-rest:latest
+    container_name: hve-iceberg-rest
+    environment:
+      CATALOG_WAREHOUSE: s3a://hve-iceberg/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: 'true'
+      AWS_ACCESS_KEY_ID: hve_admin
+      AWS_SECRET_ACCESS_KEY: hve_password123
+      AWS_REGION: us-east-1
+      CATALOG_JDBC_URI: jdbc:postgresql://postgres:5432/hve_control_plane
+      CATALOG_JDBC_USER: hve_admin
+      CATALOG_JDBC_PASSWORD: hve_password123
+      CATALOG_CATALOG__IMPL: org.apache.iceberg.jdbc.JdbcCatalog
+    ports:
+      - "8181:8181"
+    depends_on:
+      - postgres
+      - minio
+    networks:
+      - hve-network
+
+  # ==========================================
   # DATA PLANE (THE MUSCLE) - STORAGE
   # ==========================================
   minio:
@@ -50,8 +76,10 @@ services:
       mc alias set local http://minio:9000 hve_admin hve_password123;
       mc mb local/hve-bronze || true;
       mc mb local/hve-silver || true;
+      mc mb local/hve-iceberg || true;
       mc anonymous set none local/hve-bronze;
       mc anonymous set none local/hve-silver;
+      mc anonymous set none local/hve-iceberg;
       exit 0;
       "
     networks:

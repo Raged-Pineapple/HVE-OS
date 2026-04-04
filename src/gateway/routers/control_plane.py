@@ -11,6 +11,7 @@ from models import (
     APISourceConfig
 )
 from services import db_service
+from processors.api_poller import get_poller
 
 router = APIRouter(prefix="/api/v1/sources", tags=["Control Plane"])
 
@@ -21,7 +22,15 @@ router = APIRouter(prefix="/api/v1/sources", tags=["Control Plane"])
 
 @router.post("/register", response_model=SourceInfo, status_code=status.HTTP_201_CREATED)
 async def register_source(request: SourceRegistration):
-    """Register a new data source in the HVE-OS Control Plane."""
+    """
+    **Register a Data Source**
+    
+    Tells the Control Plane that a new data pipeline is being established. This is the first step before configuring Mapping Blueprints or Data Quality rules.
+    
+    * **source_id**: Must be a unique snake_case identifier (e.g. `opensky_network`).
+    * **source_type**: Identifies how data physically arrives (`API_POLL`, `STREAM`, `STATIC_FILE`).
+    * **protocol**: The transport layer (e.g. `HTTP`, `MQTT`).
+    """
     try:
         result = db_service.register_source(
             source_id=request.source_id,
@@ -67,6 +76,12 @@ async def get_source(source_id: str):
 @router.delete("/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_source(source_id: str):
     """Delete a source and all associated blueprints, rules, and configs."""
+    # Instantly kill the background API poller task if it exists
+    try:
+        await get_poller().stop_polling_source(source_id)
+    except Exception:
+        pass
+        
     deleted = db_service.delete_source(source_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found.")
@@ -81,8 +96,26 @@ async def delete_source(source_id: str):
              status_code=status.HTTP_201_CREATED)
 async def set_blueprints(source_id: str, blueprints: List[MappingBlueprintCreate]):
     """
-    Set mapping blueprints for a source.
-    Replaces all existing blueprints for this source.
+    **Configure Pipeline Mapping Blueprints (The Data Scalpel)**
+    
+    Raw data from the internet (especially from OpenStreetMap or generic APIs) is often messy and deeply nested with arrays and dictionaries. If you dump that straight into your analytical database, your queries will be slow and complex.
+    
+    This endpoint allows you to define exactly how HVE-OS extracts the hidden gold from the noise. You are telling the system: *"Go into the raw JSON payload, find this exactly formatted string, pull it out, cast it as a FLOAT, and make it a primary, top-level column in my Iceberg table."*
+    
+    ### 📝 Parameters & Tutorial
+    You must submit a JSON Array (`[...]`) containing one or more blueprint objects. Use this structure to map your data:
+    
+    * **`target_field`** *(string)*: The final mathematical column name you want in your Iceberg Lakehouse (e.g. `latitude` or `base_name`).
+    * **`json_path`** *(string)*: The JSONPath syntax used to hunt down the value inside the raw payload. 
+        * *Example 1:* Raw payload is `{"user": {"id": 5}}` -> Enter `$.user.id`.
+        * *Example 2:* Array element `{"tags": ["military", "base"]}` -> `$.tags[0]`.
+    * **`data_type`** *(string)*: Forces the system to cast the extracted string into a strict Database Schema type before saving it to Parquet. Valid options: `STRING`, `INT`, `FLOAT`, `BOOLEAN`, `BIGINT`, `TIMESTAMP`.
+    * **`is_primary_key`** *(boolean)*: If true, tells the system this row is unique (e.g., `base_id`).
+    * **`is_required`** *(boolean)*: **Powerful Gatekeeper.** If true, and the `json_path` extracts a `null` or missing value, the system will instantly reject and quarantine the row!
+    * **`default_value`** *(string, optional)*: If the extraction fails but `is_required` is false, it uses this safely.
+    
+    ### ⚠️ Warnings & Constraints
+    **Destructive Update:** Submitting a payload here completely eradicates and **replaces** any previous blueprints for this `source_id`. You must always submit your *complete* list of mapped fields.
     """
     source = db_service.get_source(source_id)
     if not source:
@@ -116,7 +149,29 @@ async def get_blueprints(source_id: str):
 @router.post("/{source_id}/dq-rules", response_model=DQRuleInfo,
              status_code=status.HTTP_201_CREATED)
 async def add_dq_rule(source_id: str, rule: DQRuleCreate):
-    """Add a data quality rule for a source."""
+    """
+    **Inject a Data Quality Filter Rule (The Python Firewall)**
+    
+    This is the ultimate anomaly detection and spam filtering gate. It allows you to dynamically inject pure Python execution barriers directly into the center of the telemetry ingest stream, filtering millions of records per second without database lock-ups.
+    
+    Instead of writing SQL queries later to filter out bad data, you filter it out *before* it physically enters the data warehouse.
+    
+    ### 📝 Parameters & Tutorial
+    * **`rule_name`** *(string)*: A human-readable name describing the firewall rule (e.g. `Must be a military base`).
+    * **`rule_logic`** *(string)*: Pure Python math and logic! The engine evaluates this string directly against the mapped Iceberg columns you generated via your Blueprints. 
+        * *Example 1 (Basic Math):* `speed_mph > 0 and speed_mph < 800`
+        * *Example 2 (String matching):* `category == 'base'`
+        * *Example 3 (Null checks):* `name is not None`
+        * *Example 4 (Lists):* `base_name.lower() not in ['classified', 'redacted']`
+    * **`action_on_fail`** *(enum)*: What physical action the system takes when your Python `rule_logic` evaluates to `False`.
+        * `QUARANTINE`: Bumps the raw payload out of the pipeline and saves it to a special "DLQ" (Dead Letter Queue) bucket in MinIO so you can inspect *why* it failed later. Recommended.
+        * `DROP`: Instantly eradicates the payload from RAM. No trace left behind.
+        * `FLAG`: Allows the row to pass perfectly into Iceberg, but attaches a red flag metadata tag for downstream warnings.
+    * **`severity`** *(enum)*: Defines how loud the alarm bells ring. Must strictly be exactly `ERROR`, `WARNING`, or `INFO`.
+    
+    ### 🛡️ Why use this instead of Blueprints?
+    Blueprints define the *shape* (`latitude` must exist). DQ Rules define the *reality* (`latitude` must exist AND be within Texas boundaries).
+    """
     source = db_service.get_source(source_id)
     if not source:
         raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found. Register it first.")

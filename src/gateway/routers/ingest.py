@@ -6,15 +6,16 @@ import os
 import sys
 import logging
 
-from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form, BackgroundTasks
 from models import (
     CanonicalEnvelope, StreamPayload, 
     PreSignedUrlRequest, PreSignedUrlResponse,
     APISourceConfig
 )
-from services.minio_service import generate_presigned_upload_url
+from services.minio_service import generate_presigned_upload_url, BRONZE_BUCKET, DLQ_BUCKET, peek_latest_objects
 from services.kafka_service import publish_stream
 from services import db_service
+from processors.api_poller import get_poller
 
 # Add src directory to path so processors package is importable
 _src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -36,9 +37,18 @@ MAX_UPLOAD_SIZE = 100 * 1024 * 1024
 @router.post("/stream", status_code=status.HTTP_202_ACCEPTED)
 async def stream_data(payload: StreamPayload):
     """
-    Accepts real-time streaming JSON, wraps it in the Canonical Envelope,
-    and drops it onto the raw Kafka topic. Acts as a high-throughput 
-    shock absorber — no storage, pure buffer.
+    **Ingest Live Telemetry Streams (The Firehose)**
+    
+    This is the primary ingestion gate for massive, high-throughput external systems pushing data to HVE-OS (e.g., IoT sensors, live aircraft transponders, real-time message queues). 
+    
+    It serves as a "Shock Absorber." It completely bypasses external databases or slow persistent disks, writing your payload instantly into the **Apache Kafka** cluster to guarantee millisecond latency and absolute server crash resilience.
+
+    ### 📝 Parameters & Behavior
+    * **`source_id`** *(string)*: The pipeline destination identity (e.g., `opensky_network`). This MUST perfectly match a previously registered source.
+    * **`data`** *(dict)*: The raw JSON object you are pushing. Send exactly what the sensor outputs. No pre-formatting required.
+    * **`debug`** *(boolean)*: **The Swiss-Army Knife.** 
+        * If `false` (default): Operates in production Fire-and-Forget mode (`202 Accepted`). Data flows asynchronously.
+        * If `true`: The system intentionally bypasses Kafka, locking the HTTP request. It synchronously forces the event step-by-step through the Database Blueprints and DQ Gates, generating a mathematically precise `PipelineTrace` JSON response showing you exact processing milliseconds and failures. Use this to construct your Blueprints!
     """
     try:
         # Ensure source is registered
@@ -85,9 +95,9 @@ async def stream_data(payload: StreamPayload):
 @router.post("/presigned-url", response_model=PreSignedUrlResponse)
 async def get_presigned_url(request: PreSignedUrlRequest):
     """
-    Returns a Pre-Signed MinIO Upload URL.
-    The client can upload files up to 50GB+ directly to MinIO,
-    completely bypassing this API's memory space to prevent crashes.
+    **Get a MinIO Pre-Signed URL for Massive Data Dumps**
+    
+    Bypasses the FastAPI memory limits. The server securely generates a temporary URL mapped directly to MinIO's storage drives. The client uses an HTTP `PUT` to upload a 50GB CSV file straight to the Lakehouse disks.
     """
     try:
         # Ensure source is registered
@@ -168,10 +178,30 @@ async def upload_static_file(
 @router.post("/register-api", status_code=status.HTTP_201_CREATED)
 async def register_api_source(config: APISourceConfig):
     """
-    Register an external API for automatic polling.
-    The system will poll this API at the specified interval,
-    wrap each response in a Canonical Envelope, and push it
-    through the full stream pipeline (Kafka → Bronze → Silver).
+    **Register an External API for Automated Polling (The API Connector)**
+    
+    This endpoint allows you to seamlessly connect HVE-OS to **any external REST API** in the world without writing custom Python scrapers. The system will autonomously wake up, fetch the data, and stream it deep into your Iceberg Lakehouse.
+    
+    ### 🚀 Deep Dive: How the Engine Works
+    1. **The Poller Wakes Up:** Every `poll_interval_seconds`, a background async worker initiates an HTTP request to the `api_url` you provided.
+    2. **Array Extraction (Crucial):** If the API returns a massive nested JSON payload containing a list (like OpenStreetMap `elements` or NewsAPI `articles`), you provide the `extraction_path` (e.g. `$.elements`). The system cuts open the JSON, extracts the array, and explodes it, treating every item inside as an independent, individual row.
+    3. **Canonical Envelope:** The system safely wraps the pure extracted JSON in our standard Envelope (injecting a mathematically unique `hve_id` and timestamps).
+    4. **Kafka Push:** The array is blasted into the `raw-telemetry` Kafka stream.
+    
+    ### 📝 Parameters & Complete Tutorial
+    A naive user can orchestrate complex extractions by strictly following these fields:
+    * **`source_id`** *(string)*: The name of your pipeline! Try to use clean snake_case (e.g., `osm_military_bases`). This dictates exactly what the resulting Iceberg table will be named in the database.
+    * **`api_url`** *(string)*: The full HTTP URL of the API you want to hit.
+    * **`method`** *(string)*: `GET` or `POST`. Most simple targets are `GET`.
+    * **`headers`** *(dict)*: Provide JSON dictionaries here for things like `{"Accept": "application/json"}`.
+    * **`poll_interval_seconds`** *(int)*: How frequently the system gathers data. 
+        * *Warning:* The maximum legal limit built into Pydantic is `86400` seconds (24 hours). For static mapping data, set this to 86400.
+    * **`extraction_path`** *(string)*: The JSONPath string (e.g. `$.elements` or `$.response.items`). If the API returns a root-level JSON array directly, you can leave this blank.
+    
+    ### ⚠️ Danger: Execution Strategy
+    **DO NOT execute this endpoint first!** 
+    Because `register-api` wakes up and queries the data instantly, the data will rush into your pipeline. If you have not created your **Blueprints** and **Data Quality (DQ) Rules** in the Control Plane endpoints yet, the system will conservatively *auto-generate* a schema based on whatever raw junk JSON it sees first, locking your Iceberg schema.
+    **Pattern:** Define Blueprints -> Define DQ Rules -> Hit `register-api`!
     """
     try:
         # Register the source
