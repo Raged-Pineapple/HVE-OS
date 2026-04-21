@@ -42,7 +42,7 @@ class DQSeverity(str, Enum):
 class StreamPayload(BaseModel):
     """Incoming raw payload from any streaming source."""
     source_id: str = Field(..., description="Unique identifier for the data source")
-    data: Dict[str, Any] = Field(..., description="The raw JSON data payload")
+    data: Any = Field(..., description="The raw JSON data payload")
     debug: bool = Field(False, description="Enable synchronous pipeline trace mode")
 
 class CanonicalEnvelope(BaseModel):
@@ -53,7 +53,7 @@ class CanonicalEnvelope(BaseModel):
     hve_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     source_id: str
     ingest_timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    payload: Dict[str, Any]
+    payload: Any
 
 class PreSignedUrlRequest(BaseModel):
     """Request model for direct-upload URL for massive static files."""
@@ -227,3 +227,35 @@ class DebugTraceRequest(BaseModel):
     """Request body for the dedicated debug trace endpoint."""
     source_id: str = Field(..., description="Source ID to trace")
     data: Dict[str, Any] = Field(..., description="The payload to push through the pipeline")
+
+
+# ============================================================
+# RAW API PROBE MODEL
+# ============================================================
+
+class RawAPIRequest(BaseModel):
+    """Request body for the raw API probe debug endpoint."""
+    api_url: str = Field(..., description="The external API URL to probe")
+    method: str = Field("GET", description="HTTP method: GET, POST, PUT, DELETE")
+    headers: Dict[str, str] = Field(default_factory=dict, description="Optional request headers")
+    body: Optional[Dict[str, Any]] = Field(None, description="Optional JSON body for POST/PUT requests")
+    auth_type: AuthType = Field(AuthType.NONE, description="Authentication type")
+    auth_credentials: Dict[str, str] = Field(default_factory=dict, description="Auth credentials (token, username/password, api_key)")
+    max_records: Optional[int] = Field(10, description="If the response is a list or has a 'states'/'elements' key, truncate to this many items to prevent browser crashes with large APIs like OpenSky. Set to null for full response.")
+
+
+class RawAPIPreviewInfo(BaseModel):
+    """Metadata about truncation applied to the raw API response."""
+    truncated: bool
+    total_records: Optional[int] = None
+    showing: Optional[int] = None
+    tip: Optional[str] = None
+
+
+class RawAPIResponse(BaseModel):
+    """Response from the raw API probe endpoint."""
+    status_code: int
+    latency_ms: float
+    raw_response: Any = Field(description="The parsed JSON response (or raw text) from the external API")
+    response_headers: Dict[str, str]
+    preview_info: RawAPIPreviewInfo

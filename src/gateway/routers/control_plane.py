@@ -75,7 +75,7 @@ async def get_source(source_id: str):
 
 @router.delete("/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_source(source_id: str):
-    """Delete a source and all associated blueprints, rules, and configs."""
+    """Delete a source and all associated blueprints, rules, configs, and data."""
     # Instantly kill the background API poller task if it exists
     try:
         await get_poller().stop_polling_source(source_id)
@@ -86,6 +86,37 @@ async def delete_source(source_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found.")
     return None
+
+
+@router.delete("/{source_id}/data", status_code=status.HTTP_200_OK)
+async def purge_source_data(source_id: str):
+    """
+    **Purge Table Data (Keep Configuration)**
+
+    Wipes all ingested data for a source — the Iceberg table and Silver registry entry —
+    without touching your source registration, blueprints, or polling config.
+
+    Use this when you want a clean slate (e.g. schema changed, bad data accumulated)
+    and plan to re-register or trigger a fresh poll immediately after.
+
+    * **Iceberg Table**: Dropped from the catalog and all Parquet files removed.
+    * **Silver Registry**: Entry cleared so the table list is clean.
+    * **Source Config / Blueprints**: ✅ Preserved — no need to re-enter them.
+    """
+    source = db_service.get_source(source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found.")
+
+    from services import iceberg_service
+    dropped = iceberg_service.drop_table(source_id)
+    db_service.purge_silver_entry(source_id)
+
+    return {
+        "status": "purged",
+        "source_id": source_id,
+        "iceberg_table_dropped": dropped,
+        "message": "Data cleared. Source config and blueprints are intact. Re-register or wait for next poll."
+    }
 
 
 # ============================================================

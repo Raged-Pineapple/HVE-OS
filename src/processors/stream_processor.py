@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:9092")
 RAW_TOPIC = "raw-telemetry"
-CONSUMER_GROUP = "hve-stream-processor"
+CONSUMER_GROUP = "hve-stream-processor-v2"
 BATCH_SIZE = 100          # Messages per batch
 BATCH_TIMEOUT_SEC = 15    # Max seconds before flushing a partial batch
 
@@ -286,7 +286,7 @@ class StreamProcessor:
                         dtype = bp.get("data_type", "STRING").upper()
                         if dtype == "INT":
                             value = int(value) if value is not None else None
-                        elif dtype == "FLOAT":
+                        elif dtype in ["FLOAT", "DOUBLE"]:
                             value = float(value) if value is not None else None
                         elif dtype == "BOOLEAN":
                             value = bool(value)
@@ -333,7 +333,13 @@ class StreamProcessor:
         if not json_path or not json_path.startswith("$"):
             return data.get(json_path, None) if isinstance(data, dict) else None
 
-        path = json_path[2:]  # Remove "$."
+        if json_path.startswith("$."):
+            path = json_path[2:]
+        elif json_path.startswith("$["):
+            path = json_path[1:]
+        else:
+            path = json_path
+
         current = data
 
         for part in path.split("."):

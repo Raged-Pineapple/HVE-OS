@@ -218,6 +218,29 @@ async def register_api_source(config: APISourceConfig):
             config=config.model_dump()
         )
 
+        # ── NEW: LIVE DATA PREVIEW ──────────────────────────────────────────
+        # Provide immediate "Plug-and-Play" verification by fetching sample data
+        import aiohttp
+        from processors.api_poller import _extract_records
+        
+        preview_data = None
+        try:
+            async with aiohttp.ClientSession() as session:
+                kwargs = {
+                    "headers": config.headers,
+                    "timeout": aiohttp.ClientTimeout(total=10)
+                }
+                if config.method.upper() == "POST" and config.body_template:
+                    kwargs["json"] = config.body_template
+                
+                async with session.request(config.method, config.api_url, **kwargs) as resp:
+                    if resp.status == 200:
+                        raw_response = await resp.json()
+                        preview_data = _extract_records(raw_response, config.extraction_path)
+        except Exception as e:
+            logger.warning(f"Registration preview fetch failed: {e}")
+        # ────────────────────────────────────────────────────────────────────
+
         # Start polling immediately if the poller is running
         try:
             from processors.api_poller import get_poller
@@ -239,7 +262,9 @@ async def register_api_source(config: APISourceConfig):
             "source_id": config.source_id,
             "api_url": config.api_url,
             "poll_interval_seconds": config.poll_interval_seconds,
-            "is_polling": api_config.get("is_polling", True)
+            "is_polling": api_config.get("is_polling", True),
+            "preview_data": preview_data[:5] if preview_data else None,
+            "total_records_found": len(preview_data) if preview_data else 0
         }
     except Exception as e:
         logger.error(f"API registration failed: {e}")

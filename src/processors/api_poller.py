@@ -206,8 +206,7 @@ class APIPoller:
                                 try:
                                     envelope = CanonicalEnvelope(
                                         source_id=source_id,
-                                        payload=record if isinstance(record, dict)
-                                                else {"value": record}
+                                        payload=record
                                     )
                                     publish_stream(envelope.model_dump())
                                     published += 1

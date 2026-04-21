@@ -110,8 +110,19 @@ def update_source_status(source_id: str, status: str):
         """, (status, source_id))
 
 def delete_source(source_id: str) -> bool:
-    """Delete a source (cascades to blueprints, DQ rules, API config)."""
+    """Delete a source (cascades to blueprints, DQ rules, API config, silver registry AND Iceberg table)."""
+    # 1. Drop the Iceberg table from the catalog (where the actual data lives)
+    try:
+        from services import iceberg_service
+        iceberg_service.drop_table(source_id)
+    except Exception as e:
+        logger.warning(f"Could not drop Iceberg table for {source_id}: {e}")
+
     with get_cursor() as cur:
+        # 2. Clean up from Silver Registry (matching by ID or Name)
+        cur.execute("DELETE FROM silver_registry WHERE source_id = %s OR table_name = %s", (source_id, source_id))
+
+        # 3. Delete the primary source record (cascades to blueprints/rules via DB foreign keys)
         cur.execute("DELETE FROM source_registry WHERE source_id = %s", (source_id,))
         return cur.rowcount > 0
 
@@ -302,6 +313,15 @@ def get_silver_table(table_name: str) -> dict:
         cur.execute("SELECT * FROM silver_registry WHERE table_name = %s", (table_name,))
         row = cur.fetchone()
         return dict(row) if row else None
+
+def purge_silver_entry(source_id: str) -> int:
+    """Remove silver registry entries for a source without deleting the source itself."""
+    with get_cursor() as cur:
+        cur.execute(
+            "DELETE FROM silver_registry WHERE source_id = %s OR table_name = %s",
+            (source_id, source_id)
+        )
+        return cur.rowcount
 
 # ============================================================
 # QUARANTINE LOG

@@ -18,7 +18,7 @@ from pyiceberg.types import (
     StructType,
     NestedField,
     IntegerType,
-    FloatType,
+    DoubleType,
     StringType,
     BooleanType,
     TimestampType
@@ -78,7 +78,7 @@ def _infer_iceberg_schema(rows: List[Dict[str, Any]]) -> Schema:
         if isinstance(val, int) and not isinstance(val, bool):
             ftype = IntegerType()
         elif isinstance(val, float):
-            ftype = FloatType()
+            ftype = DoubleType()
         elif isinstance(val, bool):
             ftype = BooleanType()
         else:
@@ -99,9 +99,23 @@ def _convert_to_pyarrow_iceberg(rows: List[Dict[str, Any]], schema: Schema) -> p
         values = [row.get(key) for row in rows]
         
         if isinstance(field.field_type, IntegerType):
-            arrays[key] = pa.array(values, type=pa.int32())
-        elif isinstance(field.field_type, FloatType):
-            arrays[key] = pa.array(values, type=pa.float64())
+            # Self-healing: cast to int if it arrived as a string
+            casted_values = []
+            for v in values:
+                try:
+                    casted_values.append(int(v) if v is not None else None)
+                except (ValueError, TypeError):
+                    casted_values.append(None)
+            arrays[key] = pa.array(casted_values, type=pa.int32())
+        elif isinstance(field.field_type, DoubleType):
+            # Self-healing: cast to float if it arrived as a string
+            casted_values = []
+            for v in values:
+                try:
+                    casted_values.append(float(v) if v is not None else None)
+                except (ValueError, TypeError):
+                    casted_values.append(None)
+            arrays[key] = pa.array(casted_values, type=pa.float64())
         elif isinstance(field.field_type, BooleanType):
             arrays[key] = pa.array(values, type=pa.bool_())
         else:
@@ -208,3 +222,19 @@ def scan_latest(source_id: str):
     table_identifier = f"{ICEBERG_NAMESPACE}.{source_id}"
     table = catalog.load_table(table_identifier)
     return table.scan().to_arrow()
+
+
+def drop_table(source_id: str) -> bool:
+    """Drop an Iceberg table from the catalog (purges all data files)."""
+    catalog = get_catalog()
+    table_identifier = f"{ICEBERG_NAMESPACE}.{source_id}"
+    try:
+        catalog.drop_table(table_identifier, purge_requested=True)
+        logger.info(f"Dropped Iceberg table: {table_identifier}")
+        return True
+    except NoSuchTableError:
+        logger.warning(f"Iceberg table not found (already gone): {table_identifier}")
+        return False
+    except Exception as e:
+        logger.error(f"Failed to drop Iceberg table {table_identifier}: {e}")
+        return False

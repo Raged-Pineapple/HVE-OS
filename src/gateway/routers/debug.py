@@ -4,10 +4,13 @@ Makes the entire HVE-OS data pipeline transparent on demand.
 """
 import time
 import logging
+import requests
 from typing import Optional, List
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from fastapi import APIRouter, HTTPException, Query
-from models import PipelineTrace, DebugTraceRequest, StageTrace, StageStatus
+from models import PipelineTrace, DebugTraceRequest, StageTrace, StageStatus, RawAPIRequest, RawAPIResponse, RawAPIPreviewInfo, AuthType
 from services import db_service
 from services.debug_pipeline import DebugPipeline
 
@@ -243,3 +246,121 @@ async def deep_health_check():
         "timestamp": str(__import__("datetime").datetime.utcnow()),
         "services": results
     }
+
+
+# ============================================================
+# POST /debug/fetch-raw-api — Raw API Probe
+# ============================================================
+
+@router.post(
+    "/fetch-raw-api",
+    response_model=RawAPIResponse,
+    summary="Probe Raw API Response",
+    description="""
+Hits an external API and returns the **exact raw payload** so you can inspect it 
+before designing your Blueprint mapping.
+
+Supports all authentication types (Bearer, API Key, Basic Auth) and custom headers.
+Send any GET or POST request and receive the full parsed JSON response alongside 
+status code, latency, and response headers — all in one call.
+
+### 🔍 Typical Use Case
+1. You have a new data source API you want to register.
+2. Call this endpoint first to see the raw payload structure.
+3. Use the response to design your Blueprint `json_path` mappings.
+4. Register the API source with confidence.
+    """
+)
+async def fetch_raw_api(request: RawAPIRequest):
+    """Hits an external API and returns the exact raw payload for Blueprint design."""
+    try:
+        # Prepare auth
+        auth = None
+        headers = dict(request.headers)
+
+        if request.auth_type == AuthType.BASIC:
+            username = request.auth_credentials.get("username", "")
+            password = request.auth_credentials.get("password", "")
+            auth = (username, password)
+        elif request.auth_type == AuthType.BEARER:
+            token = request.auth_credentials.get("token", "")
+            headers["Authorization"] = f"Bearer {token}"
+        elif request.auth_type == AuthType.API_KEY:
+            api_key = request.auth_credentials.get("api_key", "")
+            header_name = request.auth_credentials.get("header_name", "x-api-key")
+            headers[header_name] = api_key
+
+        if "User-Agent" not in headers and "user-agent" not in headers:
+            headers["User-Agent"] = "HVE-OS-DataFetcher/1.0"
+
+        # Session with automatic retry on transient errors
+        session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "POST", "PUT", "DELETE"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+
+        kwargs = {
+            "method": request.method.upper(),
+            "url": request.api_url,
+            "headers": headers,
+            "auth": auth,
+            "timeout": 30,
+        }
+        
+        if request.body:
+            # Check if we should send as form data or JSON
+            content_type = next((v for k, v in headers.items() if k.lower() == "content-type"), "")
+            if "application/x-www-form-urlencoded" in content_type:
+                kwargs["data"] = request.body
+            else:
+                kwargs["json"] = request.body
+
+        response = session.request(**kwargs)
+
+        # Try to parse JSON, fallback to raw text
+        try:
+            parsed_data = response.json()
+        except ValueError:
+            parsed_data = response.text
+
+        # ── Truncate large responses to prevent Swagger UI from crashing ──
+        total_records = None
+        truncated = False
+        if request.max_records is not None and isinstance(parsed_data, dict):
+            # Handle common array-wrapper patterns (OpenSky: "states", Overpass: "elements", etc.)
+            for key in ("states", "elements", "results", "data", "items", "records"):
+                if key in parsed_data and isinstance(parsed_data[key], list):
+                    total_records = len(parsed_data[key])
+                    if total_records > request.max_records:
+                        parsed_data = dict(parsed_data)
+                        parsed_data[key] = parsed_data[key][:request.max_records]
+                        truncated = True
+                    break
+        elif request.max_records is not None and isinstance(parsed_data, list):
+            total_records = len(parsed_data)
+            if total_records > request.max_records:
+                parsed_data = parsed_data[:request.max_records]
+                truncated = True
+
+        return RawAPIResponse(
+            status_code=response.status_code,
+            latency_ms=round(response.elapsed.total_seconds() * 1000, 2),
+            raw_response=parsed_data,
+            response_headers=dict(response.headers),
+            preview_info=RawAPIPreviewInfo(
+                truncated=truncated,
+                total_records=total_records,
+                showing=request.max_records if truncated else total_records,
+                tip="Increase 'max_records' or set to null for the full response." if truncated else None
+            )
+        )
+
+    except Exception as e:
+        logger.error(f"Raw API probe failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

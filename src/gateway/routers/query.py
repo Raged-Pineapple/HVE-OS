@@ -45,7 +45,7 @@ async def execute_query(request: QueryRequest):
     The API Gateway instantiates a high-speed DuckDB memory analytical engine, resolves the Iceberg catalog dynamically against the PostgreSQL control plane, and reads the binary columnar data directly from MinIO object storage over the network, rendering a JSON response in milliseconds.
     """
     try:
-        result = query_service.execute_query(request.sql, limit=request.limit)
+        result = query_service.execute_query(request.sql)
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

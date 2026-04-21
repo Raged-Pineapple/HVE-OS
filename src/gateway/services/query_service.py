@@ -45,6 +45,17 @@ def _refresh_tables():
         logger.warning(f"Could not fetch silver registry: {e}")
         silver_tables = []
 
+    # 1. PURGE REMOVED TABLES (Synchronization)
+    active_names = {t["table_name"] for t in silver_tables}
+    for old_table in list(_registered_tables):
+        if old_table not in active_names:
+            try:
+                conn.execute(f"DROP TABLE IF EXISTS \"{old_table}\"")
+                _registered_tables.remove(old_table)
+                logger.info(f"Purged from DuckDB (deleted in registry): {old_table}")
+            except Exception as e:
+                logger.error(f"Failed to purge {old_table} from memory: {e}")
+
     for table_info in silver_tables:
         table_name = table_info["table_name"]
         
@@ -105,15 +116,15 @@ def execute_query(sql: str, limit: int = 1000) -> dict:
     
     conn = get_connection()
     
-    # Apply limit if not already present
+    # Execute the raw SQL exactly as provided by the user
     sql_clean = sql.strip().rstrip(';')
-    if "LIMIT" not in sql_clean.upper():
-        sql_clean = f"{sql_clean} LIMIT {limit}"
     
     try:
         result = conn.execute(sql_clean)
         columns = [desc[0] for desc in result.description]
-        rows = result.fetchall()
+        
+        # Fetch only up to the safety limit to prevent OOM
+        rows = result.fetchmany(limit)
         
         # Convert to list of dicts
         row_dicts = []
