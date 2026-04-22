@@ -27,8 +27,9 @@ for _d in [_gateway_dir, _src_dir]:
         sys.path.insert(0, _d)
 
 from confluent_kafka import Consumer, KafkaError
-from services import db_service, minio_service, iceberg_service
+from services import db_service, minio_service, iceberg_service, kafka_service
 from services.minio_service import BRONZE_BUCKET, SILVER_BUCKET
+from services.kafka_service import SILVER_TOPIC
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,13 @@ class StreamProcessor:
                     total_size=file_size,
                     schema_json=schema_json
                 )
+
+                # ── Stage 6: Emit to Silver Kafka Topic ──
+                for row in clean_rows:
+                    try:
+                        kafka_service.publish_stream(row, topic=SILVER_TOPIC)
+                    except Exception as ke:
+                        logger.warning(f"[{source_id}] Failed to emit to Silver Kafka: {ke}")
 
             # Log completion
             if log_id:

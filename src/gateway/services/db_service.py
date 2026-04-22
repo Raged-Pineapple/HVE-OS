@@ -69,6 +69,31 @@ def close_pool():
         _pool.closeall()
         logger.info("PostgreSQL connection pool closed.")
 
+def ensure_graph_tables():
+    """Create Stage 5 tables if they don't exist."""
+    with get_cursor(dict_cursor=False) as cur:
+        # graph_blueprints
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS graph_blueprints (
+                source_id VARCHAR(255) PRIMARY KEY REFERENCES source_registry(source_id) ON DELETE CASCADE,
+                cypher_template TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # gold_registry
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS gold_registry (
+                source_id VARCHAR(255) PRIMARY KEY REFERENCES source_registry(source_id) ON DELETE CASCADE,
+                node_count BIGINT DEFAULT 0,
+                last_snapshot_id BIGINT,
+                status VARCHAR(50) DEFAULT 'ACTIVE',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        logger.info("Checked/Created Stage 5 Gold Graph tables.")
+
 # ============================================================
 # SOURCE REGISTRY CRUD
 # ============================================================
@@ -322,6 +347,50 @@ def purge_silver_entry(source_id: str) -> int:
             (source_id, source_id)
         )
         return cur.rowcount
+
+# ============================================================
+# GOLD REGISTRY & GRAPH BLUEPRINTS
+# ============================================================
+
+def upsert_graph_blueprint(source_id: str, cypher_template: str) -> dict:
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO graph_blueprints (source_id, cypher_template)
+            VALUES (%s, %s)
+            ON CONFLICT (source_id) DO UPDATE SET
+                cypher_template = EXCLUDED.cypher_template,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING *
+        """, (source_id, cypher_template))
+        return dict(cur.fetchone())
+
+def get_graph_blueprint(source_id: str) -> dict:
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM graph_blueprints WHERE source_id = %s", (source_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+def update_gold_registry(source_id: str, nodes_added: int, snapshot_id: int):
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO gold_registry (source_id, node_count, last_snapshot_id)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (source_id) DO UPDATE SET
+                node_count = gold_registry.node_count + EXCLUDED.node_count,
+                last_snapshot_id = EXCLUDED.last_snapshot_id,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING *
+        """, (source_id, nodes_added, snapshot_id))
+        return dict(cur.fetchone())
+
+def get_gold_registry(source_id: str = None) -> list:
+    with get_cursor() as cur:
+        if source_id:
+            cur.execute("SELECT * FROM gold_registry WHERE source_id = %s", (source_id,))
+            return [dict(row) for row in cur.fetchall()]
+        else:
+            cur.execute("SELECT * FROM gold_registry ORDER BY updated_at DESC")
+            return [dict(row) for row in cur.fetchall()]
 
 # ============================================================
 # QUARANTINE LOG

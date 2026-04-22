@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 # or localhost:9092 if running the API locally against the dockerized Kafka
 KAFKA_BROKERS = "localhost:9092"
 RAW_TOPIC = "raw-telemetry"
+SILVER_TOPIC = "silver-telemetry"
 
 def delivery_report(err, msg):
     """
@@ -34,19 +35,17 @@ producer_config = {
 }
 producer = Producer(producer_config)
 
-def publish_stream(canonical_payload: dict):
+def publish_stream(canonical_payload: dict, topic: str = RAW_TOPIC):
     """
     Publishes the wrapped Envelope to Kafka asynchronously.
-    This strictly acts as the "shock absorber", buffering streams.
     """
     try:
         # Serialization
         msg_value = json.dumps(canonical_payload).encode('utf-8')
         
         # Fire-and-forget publish
-        # Confluent Kafka handles background network transmission.
         producer.produce(
-            topic=RAW_TOPIC,
+            topic=topic,
             value=msg_value,
             callback=delivery_report
         )

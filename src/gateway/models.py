@@ -197,6 +197,30 @@ class SilverTableInfo(BaseModel):
     created_at: Optional[str]
     updated_at: Optional[str]
 
+# ============================================================
+# STAGE 5: GOLD MODELS (Graph & Blueprints)
+# ============================================================
+
+class GraphBlueprintCreate(BaseModel):
+    """Create a Cypher template for mapping Silver to Gold Neo4j."""
+    cypher_template: str = Field(..., description="Cypher UNWIND query mapping $rows to graph entities.", examples=["UNWIND $rows AS row MERGE (n:Entity {id: row.id}) SET n += row"])
+
+class GraphBlueprintInfo(BaseModel):
+    """Information about a saved Graph Blueprint."""
+    source_id: str
+    cypher_template: str
+    created_at: Optional[str]
+    updated_at: Optional[str]
+
+class GoldRegistryInfo(BaseModel):
+    """Metadata about a materialized Graph source."""
+    source_id: str
+    node_count: int
+    last_snapshot_id: Optional[int]
+    status: str
+    created_at: Optional[str]
+    updated_at: Optional[str]
+
 
 # ============================================================
 # DEBUG / TRACE MODELS

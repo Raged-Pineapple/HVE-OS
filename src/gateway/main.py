@@ -15,7 +15,7 @@ _src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _src_dir not in sys.path:
     sys.path.insert(0, _src_dir)
 
-from routers import ingest, control_plane, query, debug
+from routers import ingest, control_plane, query, debug, graph
 
 # Setup logging
 logging.basicConfig(
@@ -43,6 +43,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"[!] MinIO bucket setup: {e}")
 
+    # ── Ensure Graph Tables exist ──
+    try:
+        from services.db_service import ensure_graph_tables
+        ensure_graph_tables()
+    except Exception as e:
+        logger.warning(f"[!] Database startup: {e}")
+
     # ── Start Stream Processor (Kafka Consumer → Silver) ──
     stream_processor = None
     try:
@@ -62,6 +69,16 @@ async def lifespan(app: FastAPI):
         logger.info("[✓] API Poller started")
     except Exception as e:
         logger.warning(f"[!] API Poller startup: {e}")
+
+    # ── Start Graph Processor (Silver Kafka → Neo4j) ──
+    graph_processor = None
+    try:
+        from Logic.graph_processor import get_graph_processor
+        graph_processor = get_graph_processor()
+        graph_processor.start()
+        logger.info("[✓] Graph Processor started (Silver Kafka → Neo4j)")
+    except Exception as e:
+        logger.warning(f"[!] Graph Processor startup: {e}")
 
     logger.info("=" * 60)
     logger.info("  HVE-OS Gateway READY — All systems operational")
@@ -92,6 +109,18 @@ async def lifespan(app: FastAPI):
             await api_poller.stop()
         except Exception:
             pass
+
+    if graph_processor:
+        try:
+            graph_processor.stop()
+        except Exception:
+            pass
+
+    try:
+        from services.neo4j_service import close_neo4j
+        close_neo4j()
+    except Exception:
+        pass
 
     try:
         from services.db_service import close_pool
@@ -139,6 +168,17 @@ app.include_router(ingest.router)
 app.include_router(control_plane.router)
 app.include_router(query.router)
 app.include_router(debug.router)
+
+# Create a dedicated sub-application for the Graph Control Plane
+graph_app = FastAPI(
+    title="HVE-OS Graph Configuration API",
+    description="Dedicated Swagger UI for configuring mapping Blueprints for Neo4j.",
+    version="1.0.0",
+)
+graph_app.include_router(graph.router)
+
+# Mount the sub-app on the main app
+app.mount("/api/v1/graph", graph_app)
 
 
 @app.get("/health")
