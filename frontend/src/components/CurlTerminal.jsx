@@ -89,17 +89,17 @@ export default function CurlTerminal() {
         <div style={{ position: 'relative' }}>
           <button
             onClick={() => setShowPresets(p => !p)}
-            style={{ padding: '3px 10px', fontSize: '0.7rem', borderRadius: 5, cursor: 'pointer', background: showPresets ? 'var(--cyan-dim)' : 'var(--bg-elevated)', color: showPresets ? 'var(--cyan)' : 'var(--text-muted)', border: '1px solid var(--border-subtle)', fontFamily: 'JetBrains Mono' }}>
+            style={{ padding: '3px 10px', fontSize: '0.7rem', borderRadius: 5, cursor: 'pointer', background: showPresets ? 'var(--bg-hover)' : 'var(--bg-elevated)', color: showPresets ? 'var(--text-primary)' : 'var(--text-muted)', border: '1px solid var(--border-subtle)', fontFamily: 'JetBrains Mono' }}>
             presets ▾
           </button>
           {showPresets && (
-            <div style={{ position: 'absolute', top: '110%', left: 0, background: 'hsl(222,28%,9%)', border: '1px solid var(--border-default)', borderRadius: 8, zIndex: 200, minWidth: 540, boxShadow: '0 8px 24px hsla(0,0%,0%,0.5)', overflow: 'hidden' }}>
+            <div style={{ position: 'absolute', top: '110%', left: 0, background: 'var(--bg-surface)', border: '1px solid var(--border-default)', borderRadius: 8, zIndex: 200, minWidth: 540, boxShadow: '0 8px 24px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
               {PRESETS.map(p => (
                 <div key={p.label} onMouseDown={() => pickPreset(p)}
                   style={{ padding: '8px 14px', cursor: 'pointer', display: 'flex', gap: 12, borderBottom: '1px solid var(--border-subtle)' }}
                   onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover)'}
                   onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                  <span style={{ color: 'var(--cyan)', fontSize: '0.75rem', minWidth: 110, flexShrink: 0 }}>{p.label}</span>
+                  <span style={{ color: 'var(--text-primary)', fontSize: '0.75rem', minWidth: 110, flexShrink: 0 }}>{p.label}</span>
                   <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', fontFamily: 'JetBrains Mono', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.cmd}</span>
                 </div>
               ))}
@@ -118,7 +118,7 @@ export default function CurlTerminal() {
           <div key={i} style={{ padding: '3px 14px', borderBottom: '1px solid hsla(222,28%,15%,0.4)' }}>
             {e.type === 'info' && <span style={{ color: 'var(--text-muted)' }}>{e.text}</span>}
             {e.type === 'cmd' && (
-              <div style={{ color: 'var(--cyan)' }}>
+              <div style={{ color: 'var(--text-primary)' }}>
                 <span style={{ color: 'hsl(220,12%,35%)', marginRight: 8 }}>{e.ts}</span>
                 <span style={{ color: 'var(--text-muted)', marginRight: 6 }}>$</span>
                 {e.text}
@@ -142,7 +142,7 @@ export default function CurlTerminal() {
       </div>
 
       {/* Input bar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderTop: '1px solid var(--border-subtle)', background: 'hsl(222,28%,6%)', flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)', flexShrink: 0 }}>
         <span style={{ color: 'var(--emerald)', fontFamily: 'JetBrains Mono', fontSize: '0.85rem', flexShrink: 0 }}>$</span>
         <input
           ref={inputRef}
@@ -167,7 +167,7 @@ export default function CurlTerminal() {
         {loading
           ? <span className="spinner" style={{ width: 15, height: 15 }} />
           : (
-            <button onClick={() => run()} style={{ background: 'var(--cyan-dim)', border: '1px solid hsla(192,100%,55%,0.3)', color: 'var(--cyan)', cursor: 'pointer', padding: '3px 10px', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: '0.72rem' }}>
+            <button onClick={() => run()} style={{ background: 'var(--bg-hover)', border: '1px solid var(--border-strong)', color: 'var(--text-primary)', cursor: 'pointer', padding: '3px 10px', borderRadius: 6, fontFamily: 'JetBrains Mono', fontSize: '0.72rem' }}>
               ↵ run
             </button>
           )

@@ -33,16 +33,18 @@ function SourceList({ selected, onSelect, refresh }) {
           className="card"
           style={{
             padding: '12px 14px', cursor: 'pointer',
-            background: selected === s.source_id ? 'var(--cyan-dim)' : 'var(--glass-bg)',
-            borderColor: selected === s.source_id ? 'var(--cyan)' : 'var(--border-default)',
+            background: selected === s.source_id ? 'var(--bg-hover)' : 'var(--bg-surface)',
+            borderColor: selected === s.source_id ? 'var(--border-strong)' : 'var(--border-default)',
             transition: 'all 0.15s',
           }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <p style={{ fontWeight: 600, fontSize: '0.875rem' }}>{s.source_id}</p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, minWidth: 0 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
+              <p style={{ fontWeight: 600, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.source_id}</p>
               <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 2 }}>{s.protocol}</p>
             </div>
-            <span className={`badge badge-${protocolColor[s.source_type] || 'muted'}`}>{s.source_type}</span>
+            <span className={`badge badge-${protocolColor[s.source_type] || 'muted'}`} style={{ fontSize: '0.65rem', padding: '2px 6px', flexShrink: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {s.source_type.replace('_', ' ')}
+            </span>
           </div>
         </div>
       ))}
@@ -175,7 +177,7 @@ function DQRulesPanel({ sourceId }) {
                 <span className="badge badge-muted">{r.severity}</span>
               </div>
             </div>
-            <code style={{ fontSize: '0.78rem', color: 'var(--cyan)', fontFamily: 'JetBrains Mono' }}>{r.rule_logic}</code>
+            <code style={{ fontSize: '0.78rem', color: 'var(--text-primary)', fontFamily: 'JetBrains Mono' }}>{r.rule_logic}</code>
           </div>
         ))}
       </div>
@@ -227,9 +229,9 @@ export default function ProcessingPage() {
   const TabBtn = ({ id, label }) => (
     <button onClick={() => setTab(id)} style={{
       padding: '7px 16px', border: 'none', cursor: 'pointer', borderRadius: 7,
-      background: tab === id ? 'var(--cyan-dim)' : 'transparent',
-      color: tab === id ? 'var(--cyan)' : 'var(--text-secondary)',
-      fontWeight: tab === id ? 600 : 400, fontSize: '0.84rem',
+      background: tab === id ? 'var(--bg-hover)' : 'transparent',
+      color: tab === id ? 'var(--text-primary)' : 'var(--text-secondary)',
+      fontWeight: tab === id ? 500 : 400, fontSize: '0.84rem',
     }}>{label}</button>
   );
 

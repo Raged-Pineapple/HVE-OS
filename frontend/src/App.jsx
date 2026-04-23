@@ -11,6 +11,13 @@ export default function App() {
   const [page, setPage] = useState('ingestion');
   const [processingKey, setProcessingKey] = useState(0);
   const [outputKey, setOutputKey] = useState(0);
+  const [theme, setTheme] = useState('light');
+
+  const toggleTheme = useCallback(() => {
+    const newTheme = theme === 'light' ? 'dark' : 'light';
+    setTheme(newTheme);
+    document.documentElement.setAttribute('data-theme', newTheme);
+  }, [theme]);
 
   const navigate = useCallback((p) => {
     setPage(p);
@@ -21,7 +28,7 @@ export default function App() {
   return (
     <ToastProvider>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
-        <StatusBar activePage={page} onNavigate={navigate} />
+        <StatusBar activePage={page} onNavigate={navigate} theme={theme} onToggleTheme={toggleTheme} />
         <main style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
           {page === 'ingestion'  && <IngestionPage />}
           {page === 'processing' && <ProcessingPage key={processingKey} />}

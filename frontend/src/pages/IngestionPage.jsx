@@ -14,14 +14,14 @@ const Steps = ({ current, steps }) => (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
           <div style={{
             width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', fontSize: '0.78rem', fontWeight: 700,
-            background: i < current ? 'var(--cyan)' : i === current ? 'var(--cyan-dim)' : 'var(--bg-elevated)',
-            color: i < current ? 'hsl(222,28%,6%)' : i === current ? 'var(--cyan)' : 'var(--text-muted)',
-            border: i === current ? '2px solid var(--cyan)' : '2px solid transparent',
+            justifyContent: 'center', fontSize: '0.78rem', fontWeight: 600,
+            background: i < current ? 'var(--text-primary)' : i === current ? 'var(--bg-hover)' : 'var(--bg-elevated)',
+            color: i < current ? 'var(--bg-surface)' : i === current ? 'var(--text-primary)' : 'var(--text-muted)',
+            border: i === current ? '2px solid var(--border-strong)' : '2px solid transparent',
           }}>{i < current ? '✓' : i + 1}</div>
-          <span style={{ fontSize: '0.7rem', color: i === current ? 'var(--cyan)' : 'var(--text-muted)', fontWeight: i === current ? 600 : 400, whiteSpace: 'nowrap' }}>{s}</span>
+          <span style={{ fontSize: '0.7rem', color: i === current ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: i === current ? 500 : 400, whiteSpace: 'nowrap' }}>{s}</span>
         </div>
-        {i < steps.length - 1 && <div style={{ flex: 1, height: 2, background: i < current ? 'var(--cyan)' : 'var(--border-subtle)', margin: '-18px 8px 0', minWidth: 20 }} />}
+        {i < steps.length - 1 && <div style={{ flex: 1, height: 2, background: i < current ? 'var(--text-primary)' : 'var(--border-subtle)', margin: '-18px 8px 0', minWidth: 20 }} />}
       </React.Fragment>
     ))}
   </div>
@@ -148,7 +148,7 @@ function FileUpload() {
         <div className="field"><label>Source ID <span style={{ color: 'var(--rose)' }}>*</span></label>
           <input value={sourceId} onChange={e => setSourceId(e.target.value.replace(/\s/g, '_').toLowerCase())} placeholder="e.g. bangalore_military" /></div>
         <div onClick={() => inputRef.current.click()}
-          style={{ border: '2px dashed var(--border-default)', borderRadius: 10, padding: '28px 20px', textAlign: 'center', cursor: 'pointer', background: file ? 'var(--cyan-dim)' : 'transparent', borderColor: file ? 'var(--cyan)' : 'var(--border-default)', transition: 'all 0.2s' }}
+          style={{ border: '2px dashed var(--border-default)', borderRadius: 10, padding: '28px 20px', textAlign: 'center', cursor: 'pointer', background: file ? 'var(--bg-hover)' : 'transparent', borderColor: file ? 'var(--border-strong)' : 'var(--border-default)', transition: 'all 0.2s' }}
           onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); setFile(e.dataTransfer.files[0]); }}>
           <input ref={inputRef} type="file" style={{ display: 'none' }} accept=".csv,.json,.parquet,.xlsx,.geojson" onChange={e => setFile(e.target.files[0])} />
           <div style={{ fontSize: '1.5rem', marginBottom: 6 }}>📁</div>
@@ -168,7 +168,7 @@ function FileUpload() {
 function IngestTab() {
   const [mode, setMode] = useState('api');
   const Btn = ({ id, icon, label }) => (
-    <button onClick={() => setMode(id)} style={{ padding: '8px 20px', border: 'none', cursor: 'pointer', borderRadius: 8, background: mode === id ? 'var(--cyan-dim)' : 'transparent', color: mode === id ? 'var(--cyan)' : 'var(--text-secondary)', fontWeight: mode === id ? 600 : 400, fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: 7 }}>{icon}{label}</button>
+    <button onClick={() => setMode(id)} style={{ padding: '8px 20px', border: 'none', cursor: 'pointer', borderRadius: 8, background: mode === id ? 'var(--bg-hover)' : 'transparent', color: mode === id ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: mode === id ? 500 : 400, fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: 7 }}>{icon}{label}</button>
   );
   return (
     <div>
@@ -283,7 +283,7 @@ function DQPanel({ sourceId }) {
                 <span className="badge badge-muted">{r.severity}</span>
               </div>
             </div>
-            <code style={{ fontSize: '0.78rem', color: 'var(--cyan)', fontFamily: 'JetBrains Mono' }}>{r.rule_logic}</code>
+            <code style={{ fontSize: '0.78rem', color: 'var(--text-primary)', fontFamily: 'JetBrains Mono' }}>{r.rule_logic}</code>
           </div>
         ))}
       </div>
@@ -310,11 +310,13 @@ function PipelinesTab() {
   const [subTab, setSubTab] = useState('blueprints');
   const [loading, setLoading] = useState(true);
 
+  const protocolColor = { API_POLL: 'cyan', STREAM: 'violet', STATIC_FILE: 'emerald' };
+
   const load = () => { setLoading(true); listSources().then(setSources).catch(() => toast('Failed to load sources', 'error')).finally(() => setLoading(false)); };
   useEffect(() => { load(); }, []);
 
   const SubBtn = ({ id, label }) => (
-    <button onClick={() => setSubTab(id)} style={{ padding: '7px 16px', border: 'none', cursor: 'pointer', borderRadius: 7, background: subTab === id ? 'var(--cyan-dim)' : 'transparent', color: subTab === id ? 'var(--cyan)' : 'var(--text-secondary)', fontWeight: subTab === id ? 600 : 400, fontSize: '0.84rem' }}>{label}</button>
+    <button onClick={() => setSubTab(id)} style={{ padding: '7px 16px', border: 'none', cursor: 'pointer', borderRadius: 7, background: subTab === id ? 'var(--bg-hover)' : 'transparent', color: subTab === id ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: subTab === id ? 500 : 400, fontSize: '0.84rem' }}>{label}</button>
   );
 
   return (
@@ -322,15 +324,19 @@ function PipelinesTab() {
       <div style={{ width: 220, flexShrink: 0, borderRight: '1px solid var(--border-subtle)', paddingRight: 16, overflowY: 'auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <h3 style={{ fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>Sources</h3>
-          <button onClick={load} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--cyan)', fontSize: '0.9rem' }}>↺</button>
+          <button onClick={load} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-primary)', fontSize: '0.9rem' }}>↺</button>
         </div>
         {loading && <div style={{ display: 'flex', justifyContent: 'center', padding: 20 }}><span className="spinner" /></div>}
         {!loading && sources.length === 0 && <div className="empty-state" style={{ padding: 16, fontSize: '0.76rem' }}>No sources. Register one in Ingest tab.</div>}
         {sources.map(s => (
           <div key={s.source_id} onClick={() => setSelected(s.source_id)} className="card"
-            style={{ padding: '10px 12px', cursor: 'pointer', marginBottom: 6, background: selected === s.source_id ? 'var(--cyan-dim)' : 'var(--glass-bg)', borderColor: selected === s.source_id ? 'var(--cyan)' : 'var(--border-default)', transition: 'all 0.15s' }}>
-            <p style={{ fontWeight: 600, fontSize: '0.8rem' }}>{s.source_id}</p>
-            <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 2 }}>{s.source_type}</p>
+            style={{ padding: '10px 12px', cursor: 'pointer', marginBottom: 6, background: selected === s.source_id ? 'var(--bg-hover)' : 'var(--bg-surface)', borderColor: selected === s.source_id ? 'var(--border-strong)' : 'var(--border-default)', transition: 'all 0.15s' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, minWidth: 0 }}>
+              <p style={{ fontWeight: 600, fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{s.source_id}</p>
+              <span className={`badge badge-${protocolColor[s.source_type] || 'muted'}`} style={{ fontSize: '0.6rem', padding: '1px 5px', flexShrink: 0, textTransform: 'uppercase' }}>
+                {s.source_type.substring(0, 4)}
+              </span>
+            </div>
           </div>
         ))}
       </div>
@@ -431,8 +437,8 @@ function QueryTab() {
           {tables.length === 0 && <div className="empty-state" style={{ padding: 16, fontSize: '0.76rem' }}>No Silver tables yet</div>}
           {tables.map(t => { const name = typeof t === 'string' ? t : t.table_name; return (
             <div key={name} onClick={() => setSql(`SELECT * FROM ${name} LIMIT 50`)}
-              style={{ padding: '8px 10px', borderRadius: 7, cursor: 'pointer', fontSize: '0.78rem', fontFamily: 'JetBrains Mono', color: 'var(--cyan)', background: 'var(--cyan-dim)', marginBottom: 6, transition: 'filter 0.15s' }}
-              onMouseEnter={e => e.currentTarget.style.filter = 'brightness(1.2)'}
+              style={{ padding: '8px 10px', borderRadius: 7, cursor: 'pointer', fontSize: '0.78rem', fontFamily: 'JetBrains Mono', color: 'var(--text-primary)', background: 'var(--bg-hover)', marginBottom: 6, transition: 'filter 0.15s' }}
+              onMouseEnter={e => e.currentTarget.style.filter = 'brightness(0.95)'}
               onMouseLeave={e => e.currentTarget.style.filter = ''}>{name}</div>
           ); })}
         </div>
@@ -467,9 +473,9 @@ export default function IngestionPage() {
           {tabs.map(t => (
             <button key={t.id} onClick={() => setTab(t.id)} style={{
               padding: '10px 22px', border: 'none', cursor: 'pointer', background: 'transparent',
-              color: tab === t.id ? 'var(--cyan)' : 'var(--text-muted)',
-              borderBottom: tab === t.id ? '2px solid var(--cyan)' : '2px solid transparent',
-              fontWeight: tab === t.id ? 600 : 400, fontSize: '0.9rem',
+              color: tab === t.id ? 'var(--text-primary)' : 'var(--text-muted)',
+              borderBottom: tab === t.id ? '2px solid var(--text-primary)' : '2px solid transparent',
+              fontWeight: tab === t.id ? 500 : 400, fontSize: '0.9rem',
               display: 'flex', alignItems: 'center', gap: 7, transition: 'all 0.15s',
             }}>{t.icon} {t.label}</button>
           ))}

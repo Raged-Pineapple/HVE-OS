@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 const LEVEL_STYLE = {
-  info:    { color: 'hsl(192,100%,60%)',  prefix: 'INFO ' },
-  warning: { color: 'hsl(38,95%,58%)',   prefix: 'WARN ' },
-  error:   { color: 'hsl(352,85%,62%)',  prefix: 'ERR  ' },
-  debug:   { color: 'hsl(220,15%,55%)',  prefix: 'DBG  ' },
+  info:    { color: 'var(--cyan)',  prefix: 'INFO ' },
+  warning: { color: 'var(--amber)',   prefix: 'WARN ' },
+  error:   { color: 'var(--rose)',  prefix: 'ERR  ' },
+  debug:   { color: 'var(--text-muted)',  prefix: 'DBG  ' },
 };
 
 // When inPanel=true, LogTerminal renders only the output area (no own header/chrome).
@@ -93,8 +93,7 @@ export default function LogTerminal({ inPanel = false, onCountChange }) {
         <div style={{ display: 'flex', gap: 8, padding: '5px 12px', borderBottom: '1px solid var(--border-subtle)', alignItems: 'center' }}>
           <span style={{
             width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
-            background: connected ? 'var(--emerald)' : 'var(--text-muted)',
-            boxShadow: connected ? '0 0 6px var(--emerald)' : 'none',
+            background: connected ? 'var(--emerald)' : 'var(--border-strong)',
           }} />
           <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="filter..."
             style={{ width: 140, padding: '2px 8px', fontSize: '0.72rem', borderRadius: 5, background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)', fontFamily: 'JetBrains Mono' }} />
@@ -112,11 +111,11 @@ export default function LogTerminal({ inPanel = false, onCountChange }) {
           {filtered.map((log, i) => {
             const s = LEVEL_STYLE[log.level] || LEVEL_STYLE.info;
             return (
-              <div key={i} style={{ display: 'flex', gap: 10, padding: '0 14px', background: i % 2 === 0 ? 'transparent' : 'hsla(222,28%,7%,0.4)' }}>
-                <span style={{ color: 'hsl(220,12%,35%)', flexShrink: 0 }}>{log.ts}</span>
+              <div key={i} style={{ display: 'flex', gap: 10, padding: '0 14px', background: i % 2 === 0 ? 'transparent' : 'var(--bg-hover)' }}>
+                <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{log.ts}</span>
                 <span style={{ color: s.color, flexShrink: 0, fontWeight: 600 }}>{s.prefix}</span>
-                <span style={{ color: 'hsl(262,60%,65%)', flexShrink: 0 }}>[{log.logger}]</span>
-                <span style={{ color: 'hsl(220,15%,70%)' }}>{log.message}</span>
+                <span style={{ color: 'var(--violet)', flexShrink: 0 }}>[{log.logger}]</span>
+                <span style={{ color: 'var(--text-secondary)' }}>{log.message}</span>
               </div>
             );
           })}
@@ -126,12 +125,11 @@ export default function LogTerminal({ inPanel = false, onCountChange }) {
     );
   }
 
-  // ── Standalone mode (own header + resize) ───────────────────
   return (
-    <div style={{ position: 'relative', flexShrink: 0, borderTop: '1px solid var(--border-subtle)', background: 'hsl(222,28%,5%)', transition: 'height 0.2s ease', height: open ? height : 36, display: 'flex', flexDirection: 'column' }}>
+    <div style={{ position: 'relative', flexShrink: 0, borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-surface)', transition: 'height 0.2s ease', height: open ? height : 36, display: 'flex', flexDirection: 'column' }}>
       {open && <div onMouseDown={startDrag} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 5, cursor: 'ns-resize', zIndex: 10 }} />}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px', height: 36, flexShrink: 0, cursor: 'pointer', userSelect: 'none', borderBottom: open ? '1px solid var(--border-subtle)' : 'none' }} onClick={() => setOpen(o => !o)}>
-        <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: connected ? 'var(--emerald)' : 'var(--text-muted)', boxShadow: connected ? '0 0 6px var(--emerald)' : 'none' }} />
+        <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: connected ? 'var(--emerald)' : 'var(--border-strong)' }} />
         <span style={{ fontSize: '0.75rem', fontFamily: 'JetBrains Mono', color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '0.06em' }}>SYSTEM LOG</span>
         {logs.length > 1 && <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', background: 'var(--bg-elevated)', padding: '1px 7px', borderRadius: 99 }}>{logs.length}</span>}
         <div style={{ flex: 1 }} />
@@ -149,11 +147,11 @@ export default function LogTerminal({ inPanel = false, onCountChange }) {
           {filtered.map((log, i) => {
             const s = LEVEL_STYLE[log.level] || LEVEL_STYLE.info;
             return (
-              <div key={i} style={{ display: 'flex', gap: 10, padding: '0 14px', background: i % 2 === 0 ? 'transparent' : 'hsla(222,28%,7%,0.4)' }}>
-                <span style={{ color: 'hsl(220,12%,35%)', flexShrink: 0 }}>{log.ts}</span>
+              <div key={i} style={{ display: 'flex', gap: 10, padding: '0 14px', background: i % 2 === 0 ? 'transparent' : 'var(--bg-hover)' }}>
+                <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{log.ts}</span>
                 <span style={{ color: s.color, flexShrink: 0, fontWeight: 600 }}>{s.prefix}</span>
-                <span style={{ color: 'hsl(262,60%,65%)', flexShrink: 0 }}>[{log.logger}]</span>
-                <span style={{ color: 'hsl(220,15%,70%)' }}>{log.message}</span>
+                <span style={{ color: 'var(--violet)', flexShrink: 0 }}>[{log.logger}]</span>
+                <span style={{ color: 'var(--text-secondary)' }}>{log.message}</span>
               </div>
             );
           })}

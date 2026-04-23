@@ -24,17 +24,17 @@ export default function BottomPanel() {
       onClick={(e) => { e.stopPropagation(); setTab(id); if (!open) setOpen(true); }}
       style={{
         padding: '0 14px', height: '100%', border: 'none', cursor: 'pointer',
-        background: tab === id && open ? 'hsla(192,100%,55%,0.08)' : 'transparent',
-        color: tab === id && open ? 'var(--cyan)' : 'var(--text-muted)',
-        borderBottom: tab === id && open ? '2px solid var(--cyan)' : '2px solid transparent',
+        background: tab === id && open ? 'var(--bg-hover)' : 'transparent',
+        color: tab === id && open ? 'var(--text-primary)' : 'var(--text-secondary)',
+        borderBottom: tab === id && open ? '2px solid var(--text-primary)' : '2px solid transparent',
         fontSize: '0.72rem', fontWeight: 600, letterSpacing: '0.07em',
-        fontFamily: 'JetBrains Mono', display: 'flex', alignItems: 'center', gap: 7,
+        fontFamily: 'var(--font-sans)', display: 'flex', alignItems: 'center', gap: 7,
         transition: 'all 0.15s',
       }}
     >
       {label}
       {badge ? (
-        <span style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)', fontSize: '0.65rem', padding: '1px 6px', borderRadius: 99 }}>
+        <span style={{ background: 'var(--border-subtle)', color: 'var(--text-primary)', fontSize: '0.65rem', padding: '2px 8px', borderRadius: 99 }}>
           {badge}
         </span>
       ) : null}
@@ -46,7 +46,7 @@ export default function BottomPanel() {
       position: 'relative',
       flexShrink: 0,
       borderTop: '1px solid var(--border-subtle)',
-      background: 'hsl(222,28%,5%)',
+      background: 'var(--bg-surface)',
       height: open ? height : 36,
       display: 'flex',
       flexDirection: 'column',

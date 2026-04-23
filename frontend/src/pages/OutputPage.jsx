@@ -124,7 +124,7 @@ export default function OutputPage() {
           <div className="card" style={{ padding: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <h3>Silver Tables</h3>
-              <button onClick={loadTables} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--cyan)', fontSize: '0.9rem' }} title="Refresh">{tablesLoading ? '…' : '↺'}</button>
+              <button onClick={loadTables} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-primary)', fontSize: '0.9rem' }} title="Refresh">{tablesLoading ? '…' : '↺'}</button>
             </div>
             {tables.length === 0 && <div className="empty-state" style={{ padding: 16, fontSize: '0.78rem' }}>No Silver tables yet</div>}
             {tables.map(t => {
@@ -132,8 +132,8 @@ export default function OutputPage() {
               return (
                 <div key={name}
                   onClick={() => setSql(`SELECT * FROM ${name} LIMIT 50`)}
-                  style={{ padding: '8px 10px', borderRadius: 7, cursor: 'pointer', fontSize: '0.8rem', fontFamily: 'JetBrains Mono', color: 'var(--cyan)', background: 'var(--cyan-dim)', marginBottom: 6, transition: 'filter 0.15s' }}
-                  onMouseEnter={e => e.currentTarget.style.filter = 'brightness(1.15)'}
+                  style={{ padding: '8px 10px', borderRadius: 7, cursor: 'pointer', fontSize: '0.8rem', fontFamily: 'JetBrains Mono', color: 'var(--text-primary)', background: 'var(--bg-hover)', marginBottom: 6, transition: 'filter 0.15s' }}
+                  onMouseEnter={e => e.currentTarget.style.filter = 'brightness(0.95)'}
                   onMouseLeave={e => e.currentTarget.style.filter = ''}
                 >
                   {name}
