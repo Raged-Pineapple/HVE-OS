@@ -172,7 +172,57 @@ async def upload_static_file(
 
 
 # ============================================================
-# API REGISTRATION (New — Register External API for Polling)
+# API PREVIEW (Fetch raw data without registering anything)
+# ============================================================
+
+@router.post("/preview-api")
+async def preview_api(config: APISourceConfig):
+    """
+    **Preview Raw API Data (Read-Only Probe)**
+    
+    Fetches data from the given API URL and applies the extraction_path,
+    returning up to 50 raw JSON elements. Nothing is saved to the database,
+    Kafka, or MinIO. Use this to inspect the response shape before
+    creating Blueprints.
+    """
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession() as session:
+            req_headers = dict(config.headers or {})
+            req_headers.setdefault("User-Agent", "HVE-OS/1.0")
+            kwargs = {
+                "headers": req_headers,
+                "timeout": aiohttp.ClientTimeout(total=15)
+            }
+            if config.method.upper() == "POST" and config.body_template:
+                kwargs["json"] = config.body_template
+
+            async with session.request(config.method, config.api_url, **kwargs) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    raise HTTPException(
+                        status_code=resp.status,
+                        detail=f"API returned {resp.status}: {body[:500]}"
+                    )
+                raw = await resp.json()
+
+        from processors.api_poller import _extract_records
+        records = _extract_records(raw, config.extraction_path)
+
+        return {
+            "status": "ok",
+            "total_records": len(records),
+            "preview": records[:50],
+            "sample_keys": list(records[0].keys()) if records else [],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Preview failed: {str(e)}")
+
+
+# ============================================================
+# API REGISTRATION (Register External API for Polling)
 # ============================================================
 
 @router.post("/register-api", status_code=status.HTTP_201_CREATED)

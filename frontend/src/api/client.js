@@ -18,6 +18,14 @@ export const purgeData     = (id) => api.delete(`/api/v1/sources/${id}/data`).th
 export const registerApiSource = (payload) =>
   api.post('/api/v1/ingest/register-api', payload).then(r => r.data);
 
+// ── Preview API (read-only probe, no DB writes) ──────
+export const previewApi = (payload) =>
+  api.post('/api/v1/ingest/preview-api', payload).then(r => r.data);
+
+// ── Register a bare source (pre-register for blueprints) ──
+export const registerSource = (payload) =>
+  api.post('/api/v1/sources/register', payload).then(r => r.data);
+
 // ── Upload Static File ────────────────────────────────
 export const uploadStaticFile = (sourceId, file, onProgress) => {
   const form = new FormData();
