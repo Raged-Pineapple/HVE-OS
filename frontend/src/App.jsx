@@ -1,0 +1,34 @@
+import React, { useState, useCallback } from 'react';
+import StatusBar from './components/StatusBar.jsx';
+import { ToastProvider } from './components/ToastProvider.jsx';
+import BottomPanel from './components/BottomPanel.jsx';
+import IngestionPage from './pages/IngestionPage.jsx';
+import ProcessingPage from './pages/ProcessingPage.jsx';
+import OutputPage from './pages/OutputPage.jsx';
+import './index.css';
+
+export default function App() {
+  const [page, setPage] = useState('ingestion');
+  const [processingKey, setProcessingKey] = useState(0);
+  const [outputKey, setOutputKey] = useState(0);
+
+  const navigate = useCallback((p) => {
+    setPage(p);
+    if (p === 'processing') setProcessingKey(k => k + 1);
+    if (p === 'output') setOutputKey(k => k + 1);
+  }, []);
+
+  return (
+    <ToastProvider>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+        <StatusBar activePage={page} onNavigate={navigate} />
+        <main style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
+          {page === 'ingestion'  && <IngestionPage />}
+          {page === 'processing' && <ProcessingPage key={processingKey} />}
+          {page === 'output'     && <OutputPage key={outputKey} />}
+        </main>
+        <BottomPanel />
+      </div>
+    </ToastProvider>
+  );
+}

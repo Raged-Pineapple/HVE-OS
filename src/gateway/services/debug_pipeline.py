@@ -135,14 +135,20 @@ class DebugPipeline:
                 value=msg_bytes,
                 callback=_capture_delivery
             )
-            # Synchronous flush — wait for confirmation
-            outstanding = producer.flush(timeout=10)
+            # Poll to process callbacks; use a longer timeout to tolerate
+            # a backlogged producer queue from background pollers.
+            outstanding = producer.flush(timeout=30)
 
             if "error" in delivery_info:
                 raise Exception(delivery_info["error"])
 
-            if outstanding > 0:
-                raise Exception(f"Kafka flush timed out — {outstanding} messages still outstanding")
+            # If our specific message was delivered (callback fired), it's a pass
+            # even if other older messages in the queue are still draining.
+            if "topic" not in delivery_info and outstanding > 0:
+                raise Exception(
+                    f"Kafka flush timed out — {outstanding} messages still outstanding. "
+                    f"Kafka may be under load from background pollers. Try again shortly."
+                )
 
             self.stages["stage_2_kafka"] = StageTrace(
                 status=StageStatus.PASSED,
@@ -160,6 +166,7 @@ class DebugPipeline:
                 duration_ms=round((time.time() - t) * 1000, 2),
                 error=str(e)
             )
+
 
     # ─────────────────────────────────────────────────────────
     # STAGE 3: BRONZE

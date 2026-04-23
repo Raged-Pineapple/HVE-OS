@@ -1,3 +1,14 @@
+# Node / Frontend
+node_modules/
+dist/
+build/
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.eslintcache
+.prettiercache
+
 # Python
 __pycache__/
 *.py[cod]
@@ -22,6 +33,9 @@ credentials.json
 
 # Test artifacts
 test_flights.csv
+sample_data/
+*.db
+*.sqlite
 
 # IDE
 .vscode/
@@ -35,7 +49,8 @@ Thumbs.db
 # Logs
 *.log
 
-# MinIO / Kafka local data (from Docker volumes)
+# MinIO / Kafka / Postgres local data (from Docker volumes)
 kafka_data/
 minio_data/
 postgres_data/
+duckdb/

@@ -1,0 +1,155 @@
+.app-container {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+}
+
+/* The Dnd Sidebar */
+.sidebar {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  width: 280px;
+  z-index: 10;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sidebar h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+  letter-spacing: -0.02em;
+}
+
+.sidebar p {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+  line-height: 1.4;
+}
+
+.dndnode {
+  padding: 12px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-2);
+  cursor: grab;
+  font-size: 0.9rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transition: all 0.2s ease;
+}
+
+.dndnode:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent-blue);
+  box-shadow: 0 4px 12px var(--accent-blue-glow);
+}
+
+.dndnode:active {
+  cursor: grabbing;
+}
+
+.dndnode.input {
+  border-left: 4px solid var(--accent-blue);
+}
+
+.dndnode.ai {
+  border-left: 4px solid var(--accent-purple);
+}
+
+.dndnode.decision {
+  border-left: 4px solid var(--accent-orange);
+}
+
+.dndnode.action {
+  border-left: 4px solid var(--accent-teal);
+}
+
+/* The Canvas Wrapper */
+.reactflow-wrapper {
+  flex-grow: 1;
+  height: 100%;
+}
+
+/* Custom Node Styles */
+.custom-node {
+  padding: 16px;
+  min-width: 180px;
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.custom-node:hover {
+  border-color: var(--text-secondary);
+}
+
+.custom-node.selected {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 1px var(--accent-blue), 0 8px 32px var(--accent-blue-glow);
+}
+
+.node-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 8px;
+}
+
+.node-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  letter-spacing: -0.01em;
+}
+
+.node-content {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.node-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: hsla(0, 0%, 100%, 0.1);
+  font-size: 0.7rem;
+  margin-top: 8px;
+}
+
+.react-flow__handle {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: var(--bg-color);
+  border: 2px solid var(--text-primary);
+}
+
+.deploy-btn {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 50;
+  /* Increased z-index to ensure it sits over everything */
+  padding: 12px 24px;
+  background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.deploy-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
+}
