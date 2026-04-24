@@ -61,6 +61,31 @@ async def list_sources():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/with-status")
+async def list_sources_with_status():
+    """List all sources with their API polling health status."""
+    try:
+        sources = db_service.get_all_sources()
+        result = []
+        for s in sources:
+            for key in ['created_at', 'updated_at']:
+                if s.get(key):
+                    s[key] = str(s[key])
+            cfg = db_service.get_api_config(s['source_id'])
+            s['poll_status'] = None
+            if cfg:
+                s['poll_status'] = {
+                    'is_polling': cfg.get('is_polling', False),
+                    'last_status': cfg.get('last_status'),
+                    'last_error': cfg.get('last_error'),
+                    'last_polled_at': str(cfg['last_polled_at']) if cfg.get('last_polled_at') else None,
+                }
+            result.append(s)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{source_id}", response_model=SourceInfo)
 async def get_source(source_id: str):
     """Get details for a specific source."""

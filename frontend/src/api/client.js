@@ -10,6 +10,7 @@ export const getHealth = () => api.get('/health').then(r => r.data);
 
 // ── Sources ──────────────────────────────────────────
 export const listSources   = () => api.get('/api/v1/sources').then(r => r.data);
+export const listSourcesWithStatus = () => api.get('/api/v1/sources/with-status').then(r => r.data);
 export const getSource     = (id) => api.get(`/api/v1/sources/${id}`).then(r => r.data);
 export const deleteSource  = (id) => api.delete(`/api/v1/sources/${id}`);
 export const purgeData     = (id) => api.delete(`/api/v1/sources/${id}/data`).then(r => r.data);
