@@ -161,9 +161,8 @@ def save_api_config(source_id: str, config: dict) -> dict:
         cur.execute("""
             INSERT INTO api_source_configs 
                 (source_id, api_url, method, headers, body_template, 
-                 poll_interval_seconds, auth_type, auth_credentials, is_polling,
-                 extraction_path)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 poll_interval_seconds, auth_type, auth_credentials, is_polling)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (source_id) DO UPDATE SET
                 api_url = EXCLUDED.api_url,
                 method = EXCLUDED.method,
@@ -172,8 +171,7 @@ def save_api_config(source_id: str, config: dict) -> dict:
                 poll_interval_seconds = EXCLUDED.poll_interval_seconds,
                 auth_type = EXCLUDED.auth_type,
                 auth_credentials = EXCLUDED.auth_credentials,
-                is_polling = EXCLUDED.is_polling,
-                extraction_path = EXCLUDED.extraction_path
+                is_polling = EXCLUDED.is_polling
             RETURNING *
         """, (
             source_id,
@@ -185,7 +183,6 @@ def save_api_config(source_id: str, config: dict) -> dict:
             config.get("auth_type", "NONE"),
             json.dumps(config.get("auth_credentials", {})),
             config.get("is_polling", True),
-            config.get("extraction_path"),  # NEW: store array extraction path
         ))
         return dict(cur.fetchone())
 
@@ -220,17 +217,17 @@ def update_poll_status(source_id: str, status: str, error: str = None):
 # MAPPING BLUEPRINTS CRUD
 # ============================================================
 
-def add_blueprint(source_id: str, target_field: str, json_path: str, 
+def add_blueprint(source_id: str, target_field: str, jmes_path: str, 
                   data_type: str, is_primary_key: bool = False, 
                   is_required: bool = True, default_value: str = None) -> dict:
     """Add a mapping blueprint for a source."""
     with get_cursor() as cur:
         cur.execute("""
             INSERT INTO mapping_blueprints 
-                (source_id, target_field, json_path, data_type, is_primary_key, is_required, default_value)
+                (source_id, target_field, jmes_path, data_type, is_primary_key, is_required, default_value)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING *
-        """, (source_id, target_field, json_path, data_type, is_primary_key, is_required, default_value))
+        """, (source_id, target_field, jmes_path, data_type, is_primary_key, is_required, default_value))
         return dict(cur.fetchone())
 
 def get_blueprints(source_id: str) -> list:
@@ -240,7 +237,16 @@ def get_blueprints(source_id: str) -> list:
             SELECT * FROM mapping_blueprints 
             WHERE source_id = %s ORDER BY blueprint_id
         """, (source_id,))
-        return [dict(row) for row in cur.fetchall()]
+        results = []
+        for row in cur.fetchall():
+            d = dict(row)
+            # Poly-fill json_path for legacy code compatibility
+            if "jmes_path" in d and "json_path" not in d:
+                d["json_path"] = d["jmes_path"]
+            elif "json_path" in d and "jmes_path" not in d:
+                d["jmes_path"] = d["json_path"]
+            results.append(d)
+        return results
 
 def delete_blueprints(source_id: str) -> int:
     """Delete all blueprints for a source."""
@@ -254,14 +260,20 @@ def upsert_blueprints(source_id: str, blueprints: list) -> list:
         cur.execute("DELETE FROM mapping_blueprints WHERE source_id = %s", (source_id,))
         results = []
         for bp in blueprints:
+            # Safe extraction for the database write
+            path = bp.get("jmes_path") or bp.get("json_path") or ""
+            if path and path.startswith("$."):
+                path = path[2:] # Strip legacy JSONPath prefix
+
             cur.execute("""
                 INSERT INTO mapping_blueprints 
-                    (source_id, target_field, json_path, data_type, is_primary_key, is_required, default_value)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    (source_id, target_field, jmes_path, data_type, is_primary_key, is_required, default_value, should_explode)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
             """, (
-                source_id, bp["target_field"], bp["json_path"], bp["data_type"],
-                bp.get("is_primary_key", False), bp.get("is_required", True), bp.get("default_value")
+                source_id, bp["target_field"], path, bp["data_type"],
+                bp.get("is_primary_key", False), bp.get("is_required", True), bp.get("default_value"),
+                bp.get("should_explode", True)
             ))
             results.append(dict(cur.fetchone()))
         return results

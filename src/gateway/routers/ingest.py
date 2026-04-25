@@ -180,10 +180,9 @@ async def preview_api(config: APISourceConfig):
     """
     **Preview Raw API Data (Read-Only Probe)**
     
-    Fetches data from the given API URL and applies the extraction_path,
-    returning up to 50 raw JSON elements. Nothing is saved to the database,
-    Kafka, or MinIO. Use this to inspect the response shape before
-    creating Blueprints.
+    Fetches data from the given API URL and returns up to 50 raw JSON elements. 
+    Nothing is saved to the database, Kafka, or MinIO. Use this to inspect 
+    the response shape before creating Blueprints.
     """
     import aiohttp
     try:
@@ -206,8 +205,7 @@ async def preview_api(config: APISourceConfig):
                     )
                 raw = await resp.json()
 
-        from processors.api_poller import _extract_records
-        records = _extract_records(raw, config.extraction_path)
+        records = [raw]
 
         return {
             "status": "ok",
@@ -234,7 +232,7 @@ async def register_api_source(config: APISourceConfig):
     
     ### 🚀 Deep Dive: How the Engine Works
     1. **The Poller Wakes Up:** Every `poll_interval_seconds`, a background async worker initiates an HTTP request to the `api_url` you provided.
-    2. **Array Extraction (Crucial):** If the API returns a massive nested JSON payload containing a list (like OpenStreetMap `elements` or NewsAPI `articles`), you provide the `extraction_path` (e.g. `$.elements`). The system cuts open the JSON, extracts the array, and explodes it, treating every item inside as an independent, individual row.
+    2. **JMESPath Extraction (Crucial):** If the API returns a massive nested JSON payload containing a list (like OpenStreetMap `elements` or NewsAPI `articles`), the Stream Processor will evaluate the JMESPath blueprints you provide to extract arrays and explode them, treating every item inside as an independent, individual row.
     3. **Canonical Envelope:** The system safely wraps the pure extracted JSON in our standard Envelope (injecting a mathematically unique `hve_id` and timestamps).
     4. **Kafka Push:** The array is blasted into the `raw-telemetry` Kafka stream.
     
@@ -246,7 +244,6 @@ async def register_api_source(config: APISourceConfig):
     * **`headers`** *(dict)*: Provide JSON dictionaries here for things like `{"Accept": "application/json"}`.
     * **`poll_interval_seconds`** *(int)*: How frequently the system gathers data. 
         * *Warning:* The maximum legal limit built into Pydantic is `86400` seconds (24 hours). For static mapping data, set this to 86400.
-    * **`extraction_path`** *(string)*: The JSONPath string (e.g. `$.elements` or `$.response.items`). If the API returns a root-level JSON array directly, you can leave this blank.
     
     ### ⚠️ Danger: Execution Strategy
     **DO NOT execute this endpoint first!** 
@@ -271,7 +268,6 @@ async def register_api_source(config: APISourceConfig):
         # ── NEW: LIVE DATA PREVIEW ──────────────────────────────────────────
         # Provide immediate "Plug-and-Play" verification by fetching sample data
         import aiohttp
-        from processors.api_poller import _extract_records
         
         preview_data = None
         try:
@@ -286,7 +282,7 @@ async def register_api_source(config: APISourceConfig):
                 async with session.request(config.method, config.api_url, **kwargs) as resp:
                     if resp.status == 200:
                         raw_response = await resp.json()
-                        preview_data = _extract_records(raw_response, config.extraction_path)
+                        preview_data = [raw_response]
         except Exception as e:
             logger.warning(f"Registration preview fetch failed: {e}")
         # ────────────────────────────────────────────────────────────────────

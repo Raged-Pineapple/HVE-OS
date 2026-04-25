@@ -99,11 +99,6 @@ class APISourceConfig(BaseModel):
     poll_interval_seconds: int = Field(60, description="How often HVE-OS should wake up and hit this API (in seconds).", ge=5, le=86400, examples=[86400])
     auth_type: AuthType = Field(AuthType.NONE, description="Authentication mechanism for the external API.", examples=["NONE"])
     auth_credentials: Dict[str, str] = Field(default_factory=dict, description="Auth credentials (e.g., tokens, passwords).", examples=[{}])
-    extraction_path: Optional[str] = Field(
-        None,
-        description="JSONPath key to tell HVE-OS how to extract arrays from heavily nested JSON responses. When set, each item in the array becomes its own independent row in the Lakehouse.",
-        examples=["$.elements"]
-    )
     description: Optional[str] = Field(None, description="Human-readable description of what this poller does.", examples=["Daily pull of Military Bases"])
 
 
@@ -114,22 +109,24 @@ class APISourceConfig(BaseModel):
 class MappingBlueprintCreate(BaseModel):
     """Create a mapping blueprint for dynamic data extraction."""
     target_field: str = Field(..., description="Target column name that will be created in your clean Silver Iceberg table.", examples=["latitude"])
-    json_path: str = Field(..., description="JSONPath expression to hunt down the value inside the messy raw payload.", examples=["$.center.lat", "$.tags.name"])
+    jmes_path: str = Field(..., description="JMESPath expression to hunt down the value inside the messy raw payload.", examples=["center.lat", "tags.name"])
     data_type: str = Field("STRING", description="Target native database type (STRING, INT, FLOAT, BOOLEAN, TIMESTAMP, BIGINT).", examples=["FLOAT"])
     is_primary_key: bool = Field(False, description="Set to true if this field uniquely identifies the row.", examples=[False])
     is_required: bool = Field(True, description="If true, records missing this extraction will be instantly rejected from the pipeline.", examples=[True])
     default_value: Optional[str] = Field(None, description="Fallback value if the extraction path returns null.", examples=["Unknown"])
+    should_explode: bool = Field(True, description="If the extracted value is a list, should it be exploded into multiple rows?", examples=[True])
 
 class MappingBlueprintInfo(BaseModel):
     """Response model for a mapping blueprint."""
     blueprint_id: int
     source_id: str
     target_field: str
-    json_path: str
+    jmes_path: str
     data_type: str
     is_primary_key: bool
     is_required: bool
     default_value: Optional[str]
+    should_explode: bool
 
 
 # ============================================================

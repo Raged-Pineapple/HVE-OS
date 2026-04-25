@@ -247,8 +247,8 @@ POST /api/v1/sources/{source_id}/blueprints
 ```
 ```json
 [
-  {"target_field": "icao24", "json_path": "$.states[*][0]", "data_type": "STRING", "is_primary_key": true},
-  {"target_field": "altitude", "json_path": "$.states[*][7]", "data_type": "FLOAT"}
+  {"target_field": "icao24", "jmes_path": "states[*][0]", "data_type": "STRING", "is_primary_key": true},
+  {"target_field": "altitude", "jmes_path": "states[*][7]", "data_type": "FLOAT"}
 ]
 ```
 

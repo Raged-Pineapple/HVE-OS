@@ -99,7 +99,7 @@ def auto_generate_blueprints_from_df(source_id: str, df: pd.DataFrame) -> list:
 
         bp = {
             "target_field": col,
-            "json_path": f"$.{col}",
+            "jmes_path": col,
             "data_type": data_type,
             "is_primary_key": False,
             "is_required": False,
@@ -217,8 +217,8 @@ def process_static_file(source_id: str, filename: str, file_data: bytes) -> dict
             existing_cols = set(df.columns)
             rename_map = {}
             for bp in blueprints:
-                # Simple mapping: json_path "$.column_name" → target_field
-                src_col = bp["json_path"].replace("$.", "").strip()
+                # Use jmes_path instead of json_path
+                src_col = bp.get("jmes_path") or bp.get("json_path", "").replace("$.", "").strip()
                 if src_col in existing_cols and src_col != bp["target_field"]:
                     rename_map[src_col] = bp["target_field"]
             if rename_map:

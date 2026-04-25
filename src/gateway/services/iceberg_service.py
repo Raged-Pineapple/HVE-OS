@@ -18,6 +18,7 @@ from pyiceberg.types import (
     StructType,
     NestedField,
     IntegerType,
+    LongType,
     DoubleType,
     StringType,
     BooleanType,
@@ -76,7 +77,7 @@ def _infer_iceberg_schema(rows: List[Dict[str, Any]]) -> Schema:
     
     for key, val in sample.items():
         if isinstance(val, int) and not isinstance(val, bool):
-            ftype = IntegerType()
+            ftype = LongType()
         elif isinstance(val, float):
             ftype = DoubleType()
         elif isinstance(val, bool):
@@ -106,7 +107,7 @@ def _convert_to_pyarrow_iceberg(rows: List[Dict[str, Any]], schema: Schema) -> p
                     casted_values.append(int(v) if v is not None else None)
                 except (ValueError, TypeError):
                     casted_values.append(None)
-            arrays[key] = pa.array(casted_values, type=pa.int32())
+            arrays[key] = pa.array(casted_values, type=pa.int64())
         elif isinstance(field.field_type, DoubleType):
             # Self-healing: cast to float if it arrived as a string
             casted_values = []

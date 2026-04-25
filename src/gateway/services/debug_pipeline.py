@@ -8,15 +8,17 @@ import json
 import time
 import uuid
 import logging
+import traceback
 from datetime import datetime, timezone
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import jmespath
 
 from models import (
     CanonicalEnvelope, StageTrace, StageStatus, PipelineTrace
 )
-from services import db_service, minio_service, iceberg_service
+from services import db_service, minio_service, iceberg_service, mapping_service
 from services.minio_service import BRONZE_BUCKET, SILVER_BUCKET
 from services.kafka_service import producer, RAW_TOPIC, delivery_report
 
@@ -207,6 +209,7 @@ class DebugPipeline:
         try:
             blueprints = db_service.get_blueprints(self.source_id)
             dq_rules = db_service.get_dq_rules(self.source_id)
+            print(f"DEBUG: Source={self.source_id}, Blueprints={len(blueprints)}, Rules={len(dq_rules)}")
 
             # Auto-generate identity blueprints if none exist
             if not blueprints:
@@ -215,8 +218,16 @@ class DebugPipeline:
             else:
                 auto_generated = False
 
-            # Apply blueprints to build a mapped row
-            mapped_row = _apply_blueprints(self.payload, self._envelope, blueprints)
+            # Apply blueprints to build mapped rows (handles explosion) via shared service
+            mapped_rows = mapping_service.apply_blueprints(
+                self.payload, 
+                self.source_id, 
+                blueprints, 
+                ingest_ts=self._envelope.ingest_timestamp,
+                base_hve_id=self._envelope.hve_id
+            )
+            # Use the first row for DQ evaluation
+            mapped_row = mapped_rows[0] if mapped_rows else {}
 
             # Evaluate DQ rules
             rule_results = []
@@ -236,9 +247,9 @@ class DebugPipeline:
                     break
 
             if not failed:
-                self._clean_rows = [mapped_row]
+                self._clean_rows = mapped_rows
             else:
-                self._quarantined = [{"record": mapped_row, "reason": fail_reason}]
+                self._quarantined = [{"record": r, "reason": fail_reason} for r in mapped_rows]
 
             self.stages["stage_4_transform"] = StageTrace(
                 status=StageStatus.PASSED if not failed else StageStatus.FAILED,
@@ -249,11 +260,13 @@ class DebugPipeline:
                     "dq_rules_evaluated": len(dq_rules),
                     "rule_results": rule_results,
                     "mapped_row": mapped_row,
+                    "mapped_rows": mapped_rows,
                     "outcome": "CLEAN" if not failed else "QUARANTINED",
                     "fail_reason": fail_reason
                 }
             )
         except Exception as e:
+            traceback.print_exc()
             self.stages["stage_4_transform"] = StageTrace(
                 status=StageStatus.FAILED,
                 duration_ms=round((time.time() - t) * 1000, 2),
@@ -324,7 +337,7 @@ def _auto_blueprints(payload: dict) -> list:
             dtype = "FLOAT"
         blueprints.append({
             "target_field": key,
-            "json_path": f"$.{key}",
+            "jmes_path": key,
             "data_type": dtype,
             "is_primary_key": False,
             "is_required": False,
@@ -333,22 +346,6 @@ def _auto_blueprints(payload: dict) -> list:
     return blueprints
 
 
-def _apply_blueprints(payload: dict, envelope: CanonicalEnvelope, blueprints: list) -> dict:
-    """Apply blueprints to payload and return a flat mapped row."""
-    row = {
-        "_hve_id": envelope.hve_id,
-        "_source_id": envelope.source_id,
-        "_ingest_ts": envelope.ingest_timestamp,
-    }
-    for bp in blueprints:
-        path = bp["json_path"]
-        # Simple JSONPath: $.key
-        key = path.lstrip("$.").split(".")[0]
-        value = payload.get(key)
-        if value is None and bp.get("default_value") is not None:
-            value = bp["default_value"]
-        row[bp["target_field"]] = value
-    return row
 
 
 def _eval_rule(row: dict, logic: str) -> bool:

@@ -28,7 +28,7 @@ def infer_blueprint(source_id: str) -> List[Dict[str, Any]]:
         if isinstance(value, (str, int, float, bool)) or value is None:
             blueprints.append({
                 "target_field": key.lower(),
-                "json_path": f"$.{key}",
+                "jmes_path": f"{key}",
                 "data_type": _map_type(value),
                 "is_primary_key": key.lower() in ("id", "guid", "uuid", "icao24"),
                 "is_required": False
@@ -40,7 +40,7 @@ def infer_blueprint(source_id: str) -> List[Dict[str, Any]]:
                 if isinstance(sub_val, (str, int, float, bool)) or sub_val is None:
                     blueprints.append({
                         "target_field": f"{key}_{sub_key}".lower(),
-                        "json_path": f"$.{key}.{sub_key}",
+                        "jmes_path": f"{key}.{sub_key}",
                         "data_type": _map_type(sub_val),
                         "is_primary_key": False,
                         "is_required": False

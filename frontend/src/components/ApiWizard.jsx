@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { previewApi, registerSource, registerApiSource, getBlueprints, setBlueprints, getDQRules, addDQRule } from '../api/client.js';
+import { previewApi, registerSource, registerApiSource, getBlueprints, setBlueprints, getDQRules, addDQRule, tracePipeline } from '../api/client.js';
 import { useToast } from './ToastProvider.jsx';
+import JMESPathCanvas from './JMESPathCanvas.jsx';
 
 const STATUS_RING = { ok:'#34d399', error:'#f05050', pending:'transparent' };
 
@@ -38,7 +39,7 @@ const Steps = ({ current, steps, highest, onStepClick, stepStatus }) => (
 );
 
 const TYPES = ['STRING','INT','FLOAT','BOOLEAN','BIGINT','TIMESTAMP'];
-const blankBP = () => ({ target_field:'', json_path:'', data_type:'STRING', is_primary_key:false, is_required:false });
+const blankBP = () => ({ target_field:'', jmes_path:'', data_type:'STRING', is_primary_key:false, is_required:false });
 
 const METHOD_COLORS = { GET:'#73dc8c', POST:'#f0a44b', PUT:'#4ba3f0', DELETE:'#f05050' };
 
@@ -46,8 +47,15 @@ export default function ApiWizard() {
   const toast = useToast();
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [form, setForm] = useState({ source_id:'', api_url:'', method:'GET', headers:'', body_template:'', extraction_path:'', poll_interval_seconds:300, description:'' });
+  const [form, setForm] = useState({ source_id:'', api_url:'', method:'GET', headers:'', body_template:'', poll_interval_seconds:300, description:'' });
   const set = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('hve_api_wizard_form');
+      if (saved) setForm(JSON.parse(saved));
+    } catch { /* ignore */ }
+  }, []);
 
   const [preview, setPreview] = useState(null);
   const [previewErr, setPreviewErr] = useState(null);
@@ -60,6 +68,7 @@ export default function ApiWizard() {
   const markStep = (s, status) => setStepStatus(prev => ({...prev, [s]: status}));
   const log = (action, status, detail) => setActLog(prev => [{ts: new Date().toLocaleTimeString(), action, status, detail}, ...prev].slice(0, 50));
   const [reqTab, setReqTab] = useState('headers');
+  const [silverPreview, setSilverPreview] = useState(null);
 
   const [bps, setBPs] = useState([blankBP()]);
   const [bpSaving, setBpSaving] = useState(false);
@@ -77,14 +86,15 @@ export default function ApiWizard() {
   const fetchPreview = async () => {
     setLoading(true); setPreviewErr(null); setPreview(null);
     log('Preview API', 'pending', `${form.method} ${form.api_url}`);
+    try { localStorage.setItem('hve_api_wizard_form', JSON.stringify(form)); } catch { /* ignore */ }
     const t0 = performance.now();
     try {
       let hdrs = {}; try { hdrs = form.headers ? JSON.parse(form.headers) : {}; } catch { setPreviewErr('Invalid headers JSON'); markStep(1,'error'); log('Preview API','error','Invalid headers JSON'); setLoading(false); return; }
       let body = null; try { body = form.body_template ? JSON.parse(form.body_template) : null; } catch { setPreviewErr('Invalid body JSON'); markStep(1,'error'); log('Preview API','error','Invalid body JSON'); setLoading(false); return; }
-      const r = await previewApi({ source_id: form.source_id||'preview', api_url:form.api_url, method:form.method, headers:hdrs, body_template:body, extraction_path:form.extraction_path||null, poll_interval_seconds:60 });
+      const r = await previewApi({ source_id: form.source_id||'preview', api_url:form.api_url, method:form.method, headers:hdrs, body_template:body, poll_interval_seconds:60 });
       setPreview(r);
       setPreviewTime(((performance.now()-t0)/1000).toFixed(2));
-      if (r.sample_keys?.length) setBPs(r.sample_keys.map(k => ({ target_field:k, json_path:`$.${k}`, data_type:'STRING', is_primary_key:false, is_required:false })));
+      if (r.sample_keys?.length) setBPs(r.sample_keys.map(k => ({ target_field:k, jmes_path:k, data_type:'STRING', is_primary_key:false, is_required:false })));
       markStep(1,'ok'); log('Preview API','ok',`${r.total_records} records in ${((performance.now()-t0)/1000).toFixed(2)}s`);
       toast(`${r.total_records} records fetched`, 'success');
     } catch(e) { const msg = e?.response?.data?.detail || e.message; setPreviewErr(msg); markStep(1,'error'); log('Preview API','error',msg); }
@@ -95,8 +105,29 @@ export default function ApiWizard() {
     setBpSaving(true); log('Save Blueprints','pending',`${bps.length} fields for ${form.source_id}`);
     try {
       try { await registerSource({ source_id:form.source_id, source_type:'STREAM', protocol:'HTTP', description:form.description||'Pre-registered' }); log('Pre-register Source','ok',form.source_id); } catch { /* already exists */ }
+      // eslint-disable-next-line no-unused-vars
       await setBlueprints(form.source_id, bps.map(({blueprint_id,source_id,created_at,...r})=>r));
       setBpSaved(true); markStep(2,'ok'); log('Save Blueprints','ok',`${bps.length} fields saved`); toast('Blueprints saved!','success');
+      
+      try {
+        log('Silver Preview', 'pending', 'Fetching fresh data for preview...');
+        let hdrs = {}; try { hdrs = form.headers ? JSON.parse(form.headers) : {}; } catch { /* ignore */ }
+        let body = null; try { body = form.body_template ? JSON.parse(form.body_template) : null; } catch { /* ignore */ }
+        const p = await previewApi({ source_id: form.source_id||'preview', api_url:form.api_url, method:form.method, headers:hdrs, body_template:body, poll_interval_seconds:60 });
+        if (p && p.preview && p.preview.length > 0) {
+          const trace = await tracePipeline(form.source_id, p.preview[0]);
+          if (trace?.stages?.stage_4_transform?.detail?.mapped_rows) {
+            setSilverPreview(trace.stages.stage_4_transform.detail.mapped_rows);
+            log('Silver Preview', 'ok', `Silver preview generated (${trace.stages.stage_4_transform.detail.mapped_rows.length} rows exploded)`);
+          } else {
+            // Find which stage failed and show its error
+            const failedStage = Object.values(trace?.stages || {}).find(s => s.status === 'FAILED');
+            const errorMsg = failedStage?.error || 'Trace returned no mapped row';
+            log('Silver Preview', 'error', errorMsg);
+          }
+        } else { log('Silver Preview', 'error', 'No preview data fetched'); }
+      } catch (e) { log('Silver Preview', 'error', e?.response?.data?.detail || e.message); }
+      
     } catch(e) { const msg=e?.response?.data?.detail||'Failed'; markStep(2,'error'); log('Save Blueprints','error',msg); toast(msg,'error'); }
     finally { setBpSaving(false); }
   };
@@ -109,22 +140,23 @@ export default function ApiWizard() {
     finally { setDqAdding(false); }
   };
 
-  useEffect(() => { if (step===3 && form.source_id) getDQRules(form.source_id).then(setRules).catch(()=>{}); }, [step]);
+  useEffect(() => { if (step===3 && form.source_id) getDQRules(form.source_id).then(setRules).catch(()=>{}); }, [step, form.source_id]);
 
   const launch = async () => {
     setLoading(true); log('Register API','pending',`${form.source_id} → ${form.api_url}`);
     try {
       let hdrs={}, body=null;
-      try { hdrs=JSON.parse(form.headers||'{}'); } catch {}
-      try { body=form.body_template?JSON.parse(form.body_template):null; } catch {}
-      const res = await registerApiSource({ source_id:form.source_id, api_url:form.api_url, method:form.method, headers:hdrs, body_template:body, extraction_path:form.extraction_path||null, poll_interval_seconds:parseInt(form.poll_interval_seconds), description:form.description||null });
+      try { hdrs=JSON.parse(form.headers||'{}'); } catch { /* ignore */ }
+      try { body=form.body_template?JSON.parse(form.body_template):null; } catch { /* ignore */ }
+      const res = await registerApiSource({ source_id:form.source_id, api_url:form.api_url, method:form.method, headers:hdrs, body_template:body, poll_interval_seconds:parseInt(form.poll_interval_seconds), description:form.description||null });
       setResult(res); setStep(5); markStep(4,'ok'); log('Register API','ok',`Polling active! ${res.total_records_found||0} initial records`); toast('Polling started!','success');
     } catch(e) { const msg=e?.response?.data?.detail||'Failed'; markStep(4,'error'); log('Register API','error',msg); toast(msg,'error'); }
     finally { setLoading(false); }
   };
 
-  const reset = () => { setStep(0); setHighest(0); setResult(null); setPreview(null); setPreviewErr(null); setBPs([blankBP()]); setRules([]); setBpSaved(false); setStepStatus({}); setActLog([]); setForm({ source_id:'', api_url:'', method:'GET', headers:'', body_template:'', extraction_path:'', poll_interval_seconds:300, description:'' }); };
+  const reset = () => { setStep(0); setHighest(0); setResult(null); setPreview(null); setPreviewErr(null); setBPs([blankBP()]); setRules([]); setBpSaved(false); setStepStatus({}); setActLog([]); setForm({ source_id:'', api_url:'', method:'GET', headers:'', body_template:'', poll_interval_seconds:300, description:'' }); };
   const canNext = () => { if (step===0) return form.source_id.trim().length>0; if (step===1) return preview && preview.total_records>0; if (step===2) return bpSaved; return true; };
+  // eslint-disable-next-line no-unused-vars
   const upd = (i,k,v) => { setBPs(a=>a.map((b,j)=>j===i?{...b,[k]:v}:b)); setBpSaved(false); };
 
   // Track highest step reached (for clickable navigation)
@@ -137,21 +169,22 @@ export default function ApiWizard() {
     // Auto-refresh data for the target step
     if (target === 2 && form.source_id) {
       // Entering Blueprints: reload existing blueprints
-      try { const existing = await getBlueprints(form.source_id); if (existing.length > 0) { setBPs(existing); setBpSaved(true); } } catch {}
+      try { const existing = await getBlueprints(form.source_id); if (existing.length > 0) { setBPs(existing); setBpSaved(true); } } catch { /* ignore */ }
     }
     if (target === 3 && form.source_id) {
       // Entering DQ Rules: reload existing rules
-      try { const existing = await getDQRules(form.source_id); setRules(existing); } catch {}
+      try { const existing = await getDQRules(form.source_id); setRules(existing); } catch { /* ignore */ }
     }
   };
 
   // --- Postman-style tab button ---
+  // eslint-disable-next-line no-unused-vars
   const TabBtn = ({ id, label, active, onClick }) => (
     <button onClick={onClick} style={{ padding:'7px 16px', border:'none', cursor:'pointer', background:'transparent', color:active?'var(--text-primary)':'var(--text-muted)', borderBottom:active?'2px solid var(--cyan)':'2px solid transparent', fontWeight:active?600:400, fontSize:'0.8rem' }}>{label}</button>
   );
 
   return (
-    <div style={{ maxWidth:820 }}>
+    <div style={{ maxWidth: step === 2 ? '100%' : 820, transition: 'max-width 0.3s', width: '100%' }}>
       {step<5 && <Steps current={step} steps={wizardSteps} highest={highest} onStepClick={goToStep} stepStatus={stepStatus} />}
 
       {/* ═══ Step 0: Setup ═══ */}
@@ -211,143 +244,18 @@ export default function ApiWizard() {
       </div>}
 
       {/* ═══ Step 2: Blueprints ═══ */}
-      {step===2 && (() => {
-        // Build a clickable JSON tree from the first preview record
-        const sample = preview?.preview?.[0] || {};
-
-        const detectType = (v) => {
-          if (v === null || v === undefined) return 'STRING';
-          if (typeof v === 'boolean') return 'BOOLEAN';
-          if (typeof v === 'number') return Number.isInteger(v) ? (v > 2147483647 ? 'BIGINT' : 'INT') : 'FLOAT';
-          if (typeof v === 'string') { if (/^\d{4}-\d{2}-\d{2}/.test(v)) return 'TIMESTAMP'; return 'STRING'; }
-          return 'STRING';
-        };
-
-        const addFromTree = (path, key, value) => {
-          // Don't add if path already exists
-          if (bps.some(b => b.json_path === path)) return;
-          const newBP = { target_field: key.replace(/[^a-zA-Z0-9_]/g,'_').toLowerCase(), json_path: path, data_type: detectType(value), is_primary_key: key === 'id', is_required: false };
-          setBPs(a => [...a.filter(b => b.target_field || b.json_path), newBP]);
-          setBpSaved(false);
-        };
-
-        // Recursive tree node renderer
-        const TreeNode = ({ obj, path, depth }) => {
-          if (obj === null || obj === undefined) return null;
-          if (typeof obj !== 'object') return null;
-
-          return Object.entries(obj).map(([key, val]) => {
-            const fullPath = `${path}.${key}`;
-            const isObj = val !== null && typeof val === 'object' && !Array.isArray(val);
-            const isArr = Array.isArray(val);
-            const isLeaf = !isObj && !isArr;
-            const alreadyAdded = bps.some(b => b.json_path === fullPath);
-            const typeColor = { STRING:'#a78bfa', INT:'#34d399', FLOAT:'#34d399', BIGINT:'#34d399', BOOLEAN:'#fbbf24', TIMESTAMP:'#60a5fa' };
-
-            // For arrays: peek at the first element to show its structure
-            const arrSample = isArr && val.length > 0 ? val[0] : null;
-            const arrSampleIsObj = arrSample !== null && typeof arrSample === 'object' && !Array.isArray(arrSample);
-
-            return (
-              <TreeNodeItem key={fullPath} fullPath={fullPath} keyName={key} val={val}
-                isObj={isObj} isArr={isArr} isLeaf={isLeaf} alreadyAdded={alreadyAdded}
-                typeColor={typeColor} depth={depth} detectType={detectType}
-                addFromTree={addFromTree} bps={bps}
-                arrSample={arrSample} arrSampleIsObj={arrSampleIsObj} />
-            );
-          });
-        };
-
-        // Individual tree node with its own expand/collapse state
-        const TreeNodeItem = ({ fullPath, keyName, val, isObj, isArr, isLeaf, alreadyAdded, typeColor, depth, detectType, addFromTree, bps, arrSample, arrSampleIsObj }) => {
-          const [expanded, setExpanded] = React.useState(depth < 1);
-          const canExpand = isObj || (isArr && arrSampleIsObj);
-
-          return (
-            <div style={{ marginLeft: depth * 14 }}>
-              <div
-                onClick={canExpand ? () => setExpanded(!expanded) : isLeaf ? () => addFromTree(fullPath, keyName, val) : undefined}
-                style={{
-                  display:'flex', alignItems:'center', gap:6, padding:'3px 6px', borderRadius:5,
-                  cursor: canExpand || isLeaf ? 'pointer' : 'default',
-                  background: alreadyAdded ? 'hsla(192,100%,55%,0.08)' : 'transparent',
-                  opacity: alreadyAdded ? 0.5 : 1,
-                }}
-                onMouseEnter={e => { if (canExpand || (isLeaf && !alreadyAdded)) e.currentTarget.style.background = 'hsla(192,100%,55%,0.12)'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = alreadyAdded ? 'hsla(192,100%,55%,0.08)' : 'transparent'; }}
-                title={isLeaf ? (alreadyAdded ? 'Already added' : `Click to add as ${detectType(val)}`) : canExpand ? (expanded ? 'Collapse' : 'Expand') : ''}
-              >
-                <span style={{ color: canExpand ? 'var(--cyan)' : 'var(--text-muted)', fontSize:'0.7rem', width:10, textAlign:'center', transition:'transform 0.15s', transform: canExpand && expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>
-                  {canExpand ? '▶' : (alreadyAdded ? '✓' : '+')}
-                </span>
-                <span style={{ color:'#79c0ff', fontFamily:'JetBrains Mono', fontSize:'0.75rem' }}>{keyName}</span>
-                <span style={{ color:'var(--text-muted)', fontSize:'0.62rem' }}>:</span>
-                {isLeaf && <>
-                  <span style={{ color: typeColor[detectType(val)] || 'var(--text-secondary)', fontFamily:'JetBrains Mono', fontSize:'0.72rem', maxWidth:140, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                    {typeof val === 'string' ? `"${val.length > 20 ? val.slice(0,20)+'…' : val}"` : String(val)}
-                  </span>
-                  <span style={{ fontSize:'0.58rem', color:'var(--text-muted)', background:'var(--bg-elevated)', padding:'1px 5px', borderRadius:3, marginLeft:2 }}>{detectType(val)}</span>
-                </>}
-                {isObj && <span style={{ color:'var(--text-muted)', fontSize:'0.68rem' }}>{'{'}{expanded ? '' : '…}'}</span>}
-                {isArr && <span style={{ color:'var(--text-muted)', fontSize:'0.68rem' }}>[{val.length}]{!expanded && arrSampleIsObj ? ' ▸' : ''}</span>}
-              </div>
-              {/* Expanded children for objects */}
-              {isObj && expanded && <TreeNode obj={val} path={fullPath} depth={depth + 1} />}
-              {/* Expanded children for arrays — show first element's keys */}
-              {isArr && expanded && arrSampleIsObj && (
-                <div style={{ marginLeft: depth * 14 + 14, borderLeft:'1px dashed var(--border-subtle)', paddingLeft:6 }}>
-                  <div style={{ fontSize:'0.6rem', color:'var(--text-muted)', padding:'2px 6px', fontStyle:'italic' }}>[0] sample:</div>
-                  <TreeNode obj={arrSample} path={`${fullPath}[0]`} depth={0} />
-                </div>
-              )}
-            </div>
-          );
-        };
-
-        return (
-          <div style={{ display:'flex', gap:16, alignItems:'flex-start' }}>
-            {/* Left: JSON Tree */}
-            <div style={{ width:300, flexShrink:0, background:'var(--bg-surface)', border:'1px solid var(--border-default)', borderRadius:10, overflow:'hidden' }}>
-              <div style={{ padding:'10px 14px', borderBottom:'1px solid var(--border-subtle)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                <span style={{ fontSize:'0.78rem', fontWeight:600, color:'var(--text-muted)' }}>Sample Record</span>
-                <span style={{ fontSize:'0.65rem', color:'var(--cyan)' }}>click to add →</span>
-              </div>
-              <div style={{ padding:'8px 6px', maxHeight:420, overflowY:'auto' }}>
-                {Object.keys(sample).length > 0
-                  ? <TreeNode obj={sample} path="$" depth={0} />
-                  : <div style={{ padding:20, textAlign:'center', color:'var(--text-muted)', fontSize:'0.8rem' }}>No preview data.<br/>Go back and Send first.</div>
-                }
-              </div>
-            </div>
-
-            {/* Right: Blueprint Table */}
-            <div style={{ flex:1, minWidth:0 }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
-                <div><h2 style={{ fontSize:'1.1rem' }}>Mapping Blueprints</h2><p style={{ fontSize:'0.72rem', color:'var(--text-muted)' }}>Click fields on the left or edit manually</p></div>
-                <div style={{ display:'flex', gap:8 }}>
-                  <button className="btn btn-ghost" onClick={()=>setBPs(a=>[...a,blankBP()])}>+ Field</button>
-                  <button className="btn btn-primary" onClick={saveBPs} disabled={bpSaving}>{bpSaving?<span className="spinner"/>:bpSaved?'✓ Saved':'💾 Save'}</button>
-                </div>
-              </div>
-              <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1.2fr 86px 44px 44px 26px', gap:5, fontSize:'0.65rem', color:'var(--text-muted)', textTransform:'uppercase', padding:'0 4px' }}>
-                  <span>Field</span><span>JSON Path</span><span>Type</span><span>PK</span><span>Req</span><span/>
-                </div>
-                {bps.map((bp,i)=>(
-                  <div key={i} style={{ display:'grid', gridTemplateColumns:'1fr 1.2fr 86px 44px 44px 26px', gap:5, padding:'7px 8px', alignItems:'center', background:'var(--bg-elevated)', borderRadius:7, border:'1px solid var(--border-subtle)' }}>
-                    <input value={bp.target_field} onChange={e=>upd(i,'target_field',e.target.value)} placeholder="latitude" style={{fontSize:'0.78rem'}} />
-                    <input value={bp.json_path} onChange={e=>upd(i,'json_path',e.target.value)} placeholder="$.lat" style={{fontFamily:'JetBrains Mono',fontSize:'0.74rem'}} />
-                    <select value={bp.data_type} onChange={e=>upd(i,'data_type',e.target.value)} style={{fontSize:'0.74rem'}}>{TYPES.map(t=><option key={t}>{t}</option>)}</select>
-                    <div style={{display:'flex',justifyContent:'center'}}><input type="checkbox" checked={bp.is_primary_key} onChange={e=>upd(i,'is_primary_key',e.target.checked)} /></div>
-                    <div style={{display:'flex',justifyContent:'center'}}><input type="checkbox" checked={bp.is_required} onChange={e=>upd(i,'is_required',e.target.checked)} /></div>
-                    <button onClick={()=>setBPs(a=>a.filter((_,j)=>j!==i))} style={{background:'none',border:'none',cursor:'pointer',color:'var(--text-muted)',fontSize:'0.85rem'}}>✕</button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {step===2 && (
+        <JMESPathCanvas 
+          preview={preview}
+          bps={bps} 
+          setBPs={setBPs} 
+          bpSaving={bpSaving} 
+          bpSaved={bpSaved} 
+          saveBPs={saveBPs} 
+          blankBP={blankBP} 
+          silverPreview={silverPreview}
+        />
+      )}
 
       {/* ═══ Step 3: DQ Rules ═══ */}
       {step===3 && <div className="card" style={{ padding:24 }}>
@@ -378,7 +286,7 @@ export default function ApiWizard() {
       {step===4 && <div className="card" style={{ padding:24 }}>
         <h2 style={{marginBottom:14}}>Review & Launch</h2>
         <div style={{background:'var(--bg-elevated)',borderRadius:8,border:'1px solid var(--border-subtle)',padding:16,marginBottom:16}}>
-          {[['Source ID',form.source_id],['API URL',form.api_url],['Method',form.method],['Extraction',form.extraction_path||'(root)'],['Blueprints',`${bps.length} fields`],['DQ Rules',`${rules.length} rules`]].map(([k,v])=>(
+          {[['Source ID',form.source_id],['API URL',form.api_url],['Method',form.method],['Blueprints',`${bps.length} fields`],['DQ Rules',`${rules.length} rules`]].map(([k,v])=>(
             <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:'1px solid var(--border-subtle)',fontSize:'0.82rem'}}>
               <span style={{color:'var(--text-muted)'}}>{k}</span>
               <span style={{fontFamily:'JetBrains Mono',color:'var(--text-primary)',maxWidth:360,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{v}</span>

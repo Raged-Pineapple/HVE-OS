@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "jmespath": "^0.16.0"
+  }
+}

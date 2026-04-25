@@ -24,37 +24,37 @@ def main():
         "context_military_bases": {
             "description": "Daily pull of Military Bases",
             "blueprints": [
-                {"target_field": "node_id", "json_path": "$.id", "data_type": "STRING", "is_primary_key": True},
-                {"target_field": "lat", "json_path": "$.lat", "data_type": "FLOAT", "is_primary_key": False},
-                {"target_field": "lon", "json_path": "$.lon", "data_type": "FLOAT", "is_primary_key": False},
-                {"target_field": "tags", "json_path": "$.tags", "data_type": "STRING", "is_primary_key": False}
+                {"target_field": "node_id", "jmes_path": "id", "data_type": "STRING", "is_primary_key": True},
+                {"target_field": "lat", "jmes_path": "lat", "data_type": "FLOAT", "is_primary_key": False},
+                {"target_field": "lon", "jmes_path": "lon", "data_type": "FLOAT", "is_primary_key": False},
+                {"target_field": "tags", "jmes_path": "tags", "data_type": "STRING", "is_primary_key": False}
             ]
         },
         "overpass_military": {
             "description": "Overpass Military feed",
             "blueprints": [
-                {"target_field": "node_id", "json_path": "$.id", "data_type": "STRING", "is_primary_key": True},
-                {"target_field": "lat", "json_path": "$.lat", "data_type": "FLOAT", "is_primary_key": False},
-                {"target_field": "lon", "json_path": "$.lon", "data_type": "FLOAT", "is_primary_key": False},
-                {"target_field": "tags", "json_path": "$.tags", "data_type": "STRING", "is_primary_key": False}
+                {"target_field": "node_id", "jmes_path": "id", "data_type": "STRING", "is_primary_key": True},
+                {"target_field": "lat", "jmes_path": "lat", "data_type": "FLOAT", "is_primary_key": False},
+                {"target_field": "lon", "jmes_path": "lon", "data_type": "FLOAT", "is_primary_key": False},
+                {"target_field": "tags", "jmes_path": "tags", "data_type": "STRING", "is_primary_key": False}
             ]
         },
         "news_tech_stream": {
             "description": "Tech News stream",
             "blueprints": [
-                {"target_field": "article_id", "json_path": "$.id", "data_type": "STRING", "is_primary_key": True},
-                {"target_field": "title", "json_path": "$.title", "data_type": "STRING", "is_primary_key": False},
-                {"target_field": "author", "json_path": "$.author", "data_type": "STRING", "is_primary_key": False},
-                {"target_field": "url", "json_path": "$.url", "data_type": "STRING", "is_primary_key": False}
+                {"target_field": "article_id", "jmes_path": "id", "data_type": "STRING", "is_primary_key": True},
+                {"target_field": "title", "jmes_path": "title", "data_type": "STRING", "is_primary_key": False},
+                {"target_field": "author", "jmes_path": "author", "data_type": "STRING", "is_primary_key": False},
+                {"target_field": "url", "jmes_path": "url", "data_type": "STRING", "is_primary_key": False}
             ]
         },
         "finnhub_market_news": {
             "description": "Finnhub Market Data",
             "blueprints": [
-                {"target_field": "news_id", "json_path": "$.id", "data_type": "STRING", "is_primary_key": True},
-                {"target_field": "headline", "json_path": "$.headline", "data_type": "STRING", "is_primary_key": False},
-                {"target_field": "datetime", "json_path": "$.datetime", "data_type": "INT", "is_primary_key": False},
-                {"target_field": "source", "json_path": "$.source", "data_type": "STRING", "is_primary_key": False}
+                {"target_field": "news_id", "jmes_path": "id", "data_type": "STRING", "is_primary_key": True},
+                {"target_field": "headline", "jmes_path": "headline", "data_type": "STRING", "is_primary_key": False},
+                {"target_field": "datetime", "jmes_path": "datetime", "data_type": "INT", "is_primary_key": False},
+                {"target_field": "source", "jmes_path": "source", "data_type": "STRING", "is_primary_key": False}
             ]
         }
     }

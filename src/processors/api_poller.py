@@ -28,31 +28,11 @@ from models import CanonicalEnvelope
 logger = logging.getLogger(__name__)
 
 
-def _extract_records(data, extraction_path: str) -> list:
+def _send_full_response(data) -> list:
     """
-    Extract an array of records from the API response.
-
-    If extraction_path is set (e.g. "$.states" or "$.articles"),
-    navigate into the response and return the array.
-
-    If extraction_path is None:
-      - If the response IS a list → return it directly
-      - Otherwise → wrap the whole response as a single record
+    Always send the complete raw API response as a single Kafka message.
+    The stream processor will apply JMESPath against the full payload.
     """
-    if extraction_path:
-        # Strip the leading "$." prefix
-        key = extraction_path.lstrip("$.").split(".")[0]
-        value = data.get(key) if isinstance(data, dict) else None
-        if isinstance(value, list):
-            return value
-        elif value is not None:
-            return [value]
-        else:
-            return [data]
-
-    if isinstance(data, list):
-        return data
-
     return [data]
 
 
@@ -146,9 +126,10 @@ class APIPoller:
         auth_type = config.get("auth_type", "NONE")
         auth_creds = config.get("auth_credentials", {})
 
-        # extraction_path: tells us where the array lives in the response
-        # e.g. "$.states" for OpenSky, "$.articles" for NewsAPI
-        extraction_path = config.get("extraction_path")
+        # Log polling mode
+        logger.info(
+            f"[APIPoller:{source_id}] Polling {method} {api_url} every {interval}s | mode=full-jmespath"
+        )
 
         # Parse headers/creds if stored as JSON strings
         if isinstance(headers, str):
@@ -175,11 +156,6 @@ class APIPoller:
             ).decode()
             headers["Authorization"] = f"Basic {creds}"
 
-        logger.info(
-            f"[APIPoller:{source_id}] Polling {method} {api_url} every {interval}s"
-            + (f" | extraction_path={extraction_path}" if extraction_path else " | mode=blob")
-        )
-
         while self._running:
             try:
                 async with aiohttp.ClientSession() as session:
@@ -194,11 +170,11 @@ class APIPoller:
                         if response.status == 200:
                             data = await response.json()
 
-                            # ── ARRAY EXPLOSION ─────────────────────────────
-                            # Extract individual records from the response.
-                            # Each record is published as its own Kafka message,
-                            # keeping message size <<1MB regardless of response size.
-                            records = _extract_records(data, extraction_path)
+                            # ── FULL RESPONSE → KAFKA ────────────────────────
+                            # Send the complete raw API response as ONE message.
+                            # JMESPath in blueprints will be evaluated against
+                            # this full payload in the stream processor.
+                            records = _send_full_response(data)
 
                             published = 0
                             errors = 0
@@ -218,8 +194,8 @@ class APIPoller:
 
                             db_service.update_poll_status(source_id, "SUCCESS")
                             logger.info(
-                                f"[APIPoller:{source_id}] ✅ {published} records → Kafka "
-                                f"({errors} errors, response={len(records)} items)"
+                                f"[APIPoller:{source_id}] ✅ {published} full response → Kafka "
+                                f"({errors} errors)"
                             )
 
                         else:

@@ -23,6 +23,10 @@ export const registerApiSource = (payload) =>
 export const previewApi = (payload) =>
   api.post('/api/v1/ingest/preview-api', payload).then(r => r.data);
 
+// ── Pipeline Trace (Debug) ───────────────────────────
+export const tracePipeline = (sourceId, data) =>
+  api.post('/api/v1/debug/trace', { source_id: sourceId, data: data }).then(r => r.data);
+
 // ── Register a bare source (pre-register for blueprints) ──
 export const registerSource = (payload) =>
   api.post('/api/v1/sources/register', payload).then(r => r.data);

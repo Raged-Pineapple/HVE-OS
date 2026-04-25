@@ -16,6 +16,7 @@ import threading
 from datetime import datetime
 from collections import defaultdict
 
+import jmespath
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -27,7 +28,7 @@ for _d in [_gateway_dir, _src_dir]:
         sys.path.insert(0, _d)
 
 from confluent_kafka import Consumer, KafkaError
-from services import db_service, minio_service, iceberg_service, kafka_service
+from services import db_service, minio_service, iceberg_service, kafka_service, mapping_service
 from services.minio_service import BRONZE_BUCKET, SILVER_BUCKET
 from services.kafka_service import SILVER_TOPIC
 
@@ -275,112 +276,42 @@ class StreamProcessor:
         quarantined = []
 
         for msg in messages:
+            # ── 3. Transform: Apply Blueprints via Unified Service ──
             payload = msg.get("payload", msg)
-            row = {
-                "_hve_id": msg.get("hve_id", str(uuid.uuid4())),
-                "_source_id": source_id,
-                "_ingest_ts": msg.get("ingest_timestamp", datetime.utcnow().isoformat()),
-            }
+            rows = mapping_service.apply_blueprints(
+                payload, 
+                source_id, 
+                blueprints, 
+                ingest_ts=msg.get("ingest_timestamp"),
+                base_hve_id=msg.get("hve_id")
+            )
 
-            # Apply blueprints: extract fields from payload
-            for bp in blueprints:
-                target = bp["target_field"]
-                json_path = bp["json_path"]
-                value = self._extract_value(payload, json_path)
+            for row in rows:
+                # Apply DQ Rules (Gatekeeper)
+                failed = False
+                failure_reasons = []
+                for rule in dq_rules:
+                    if not self._evaluate_dq_rule(row, rule["rule_logic"]):
+                        failed = True
+                        reason = f"Rule '{rule.get('rule_name', rule['rule_id'])}' failed: {rule['rule_logic']}"
+                        failure_reasons.append(reason)
+                        
+                        action = rule.get("action_on_fail", "QUARANTINE")
+                        if action == "QUARANTINE":
+                            quarantined.append({
+                                "record": row,
+                                "reasons": failure_reasons,
+                                "rule_id": rule.get("rule_id"),
+                                "rule_name": rule.get("rule_name"),
+                            })
+                            break
+                        elif action == "DROP":
+                            break
 
-                # Type coercion
-                if value is not None:
-                    try:
-                        dtype = bp.get("data_type", "STRING").upper()
-                        if dtype == "INT":
-                            value = int(value) if value is not None else None
-                        elif dtype in ["FLOAT", "DOUBLE"]:
-                            value = float(value) if value is not None else None
-                        elif dtype == "BOOLEAN":
-                            value = bool(value)
-                        else:
-                            value = str(value) if value is not None else None
-                    except (ValueError, TypeError):
-                        value = bp.get("default_value")
-                elif bp.get("default_value") is not None:
-                    value = bp["default_value"]
-
-                row[target] = value
-
-            # Apply DQ Rules (Gatekeeper)
-            failed = False
-            failure_reasons = []
-            for rule in dq_rules:
-                if not self._evaluate_dq_rule(row, rule["rule_logic"]):
-                    failed = True
-                    reason = f"Rule '{rule.get('rule_name', rule['rule_id'])}' failed: {rule['rule_logic']}"
-                    failure_reasons.append(reason)
-                    
-                    action = rule.get("action_on_fail", "QUARANTINE")
-                    if action == "QUARANTINE":
-                        quarantined.append({
-                            "record": row,
-                            "reasons": failure_reasons,
-                            "rule_id": rule.get("rule_id"),
-                            "rule_name": rule.get("rule_name"),
-                        })
-                        break
-                    elif action == "DROP":
-                        break
-
-            if not failed:
-                clean_rows.append(row)
+                if not failed:
+                    clean_rows.append(row)
 
         return clean_rows, quarantined
-
-    def _extract_value(self, data: dict, json_path: str):
-        """
-        Simple JSONPath extractor.
-        Supports: $.key, $.nested.key, $.array[0], $.array[*][N]
-        """
-        if not json_path or not json_path.startswith("$"):
-            return data.get(json_path, None) if isinstance(data, dict) else None
-
-        if json_path.startswith("$."):
-            path = json_path[2:]
-        elif json_path.startswith("$["):
-            path = json_path[1:]
-        else:
-            path = json_path
-
-        current = data
-
-        for part in path.split("."):
-            if current is None:
-                return None
-
-            # Handle array access: key[N] or key[*][N]
-            if "[" in part:
-                key = part[:part.index("[")]
-                idx_str = part[part.index("[") + 1:part.index("]")]
-
-                if key:
-                    current = current.get(key) if isinstance(current, dict) else None
-                
-                if current is None:
-                    return None
-
-                if idx_str == "*":
-                    # Return the whole list, let the next part index into items
-                    continue
-                else:
-                    try:
-                        idx = int(idx_str)
-                        if isinstance(current, list) and idx < len(current):
-                            current = current[idx]
-                        else:
-                            return None
-                    except (ValueError, IndexError):
-                        return None
-            else:
-                current = current.get(part) if isinstance(current, dict) else None
-
-        return current
 
     def _evaluate_dq_rule(self, row: dict, rule_logic: str) -> bool:
         """

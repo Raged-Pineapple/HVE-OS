@@ -40,7 +40,7 @@ function BlueprintEditor({ sourceId }) {
   const [bps, setBPs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const blank = () => ({ target_field: '', json_path: '', data_type: 'STRING', is_primary_key: false, is_required: false });
+  const blank = () => ({ target_field: '', jmes_path: '', data_type: 'STRING', is_primary_key: false, is_required: false });
   useEffect(() => { if (!sourceId) return; setLoading(true); getBlueprints(sourceId).then(r => setBPs(r.length ? r : [blank()])).finally(() => setLoading(false)); }, [sourceId]);
   const upd = (i, k, v) => setBPs(a => a.map((b, j) => j === i ? { ...b, [k]: v } : b));
   const save = async () => { setSaving(true); try { await setBlueprints(sourceId, bps.map(({ blueprint_id, source_id, created_at, ...r }) => r)); toast('Saved!', 'success'); } catch (e) { toast('Failed', 'error'); } finally { setSaving(false); } };
@@ -57,7 +57,7 @@ function BlueprintEditor({ sourceId }) {
         {bps.map((bp, i) => (
           <div key={i} className="card" style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 90px 50px 50px 28px', gap: 6, padding: '8px 10px', alignItems: 'center', background: 'var(--bg-elevated)' }}>
             <input value={bp.target_field} onChange={e => upd(i, 'target_field', e.target.value)} placeholder="latitude" />
-            <input value={bp.json_path} onChange={e => upd(i, 'json_path', e.target.value)} placeholder="$.lat" style={{ fontFamily: 'JetBrains Mono', fontSize: '0.76rem' }} />
+            <input value={bp.jmes_path} onChange={e => upd(i, 'jmes_path', e.target.value)} placeholder="center.lat" style={{ fontFamily: 'JetBrains Mono', fontSize: '0.76rem' }} />
             <select value={bp.data_type} onChange={e => upd(i, 'data_type', e.target.value)}>{['STRING', 'INT', 'FLOAT', 'BOOLEAN', 'BIGINT', 'TIMESTAMP'].map(t => <option key={t}>{t}</option>)}</select>
             <div style={{ display: 'flex', justifyContent: 'center' }}><input type="checkbox" checked={bp.is_primary_key} onChange={e => upd(i, 'is_primary_key', e.target.checked)} /></div>
             <div style={{ display: 'flex', justifyContent: 'center' }}><input type="checkbox" checked={bp.is_required} onChange={e => upd(i, 'is_required', e.target.checked)} /></div>

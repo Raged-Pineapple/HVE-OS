@@ -267,7 +267,7 @@ status code, latency, and response headers — all in one call.
 ### 🔍 Typical Use Case
 1. You have a new data source API you want to register.
 2. Call this endpoint first to see the raw payload structure.
-3. Use the response to design your Blueprint `json_path` mappings.
+3. Use the response to design your Blueprint `jmes_path` mappings.
 4. Register the API source with confidence.
     """
 )

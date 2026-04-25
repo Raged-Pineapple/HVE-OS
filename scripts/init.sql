@@ -40,11 +40,12 @@ CREATE TABLE IF NOT EXISTS mapping_blueprints (
     blueprint_id SERIAL PRIMARY KEY,
     source_id VARCHAR(255) NOT NULL,
     target_field VARCHAR(255) NOT NULL,
-    json_path VARCHAR(500) NOT NULL,
+    jmes_path VARCHAR(500) NOT NULL,
     data_type VARCHAR(50) NOT NULL,             -- STRING, INT, FLOAT, BOOLEAN, TIMESTAMP
     is_primary_key BOOLEAN DEFAULT FALSE,
     is_required BOOLEAN DEFAULT TRUE,
     default_value TEXT,
+    should_explode BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_blueprint_source
         FOREIGN KEY(source_id) 
@@ -123,16 +124,16 @@ INSERT INTO source_registry (source_id, source_type, protocol, status, descripti
 VALUES ('opensky_data', 'API_POLL', 'HTTP', 'ACTIVE', 'OpenSky Network live flight data')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO mapping_blueprints (source_id, target_field, json_path, data_type, is_primary_key) 
+INSERT INTO mapping_blueprints (source_id, target_field, jmes_path, data_type, is_primary_key) 
 VALUES 
-('opensky_data', 'icao24', '$.states[*][0]', 'STRING', TRUE),
-('opensky_data', 'callsign', '$.states[*][1]', 'STRING', FALSE),
-('opensky_data', 'origin_country', '$.states[*][2]', 'STRING', FALSE),
-('opensky_data', 'longitude', '$.states[*][5]', 'FLOAT', FALSE),
-('opensky_data', 'latitude', '$.states[*][6]', 'FLOAT', FALSE),
-('opensky_data', 'altitude', '$.states[*][7]', 'FLOAT', FALSE),
-('opensky_data', 'velocity', '$.states[*][9]', 'FLOAT', FALSE),
-('opensky_data', 'on_ground', '$.states[*][8]', 'BOOLEAN', FALSE)
+('opensky_data', 'icao24', 'states[*][0]', 'STRING', TRUE),
+('opensky_data', 'callsign', 'states[*][1]', 'STRING', FALSE),
+('opensky_data', 'origin_country', 'states[*][2]', 'STRING', FALSE),
+('opensky_data', 'longitude', 'states[*][5]', 'FLOAT', FALSE),
+('opensky_data', 'latitude', 'states[*][6]', 'FLOAT', FALSE),
+('opensky_data', 'altitude', 'states[*][7]', 'FLOAT', FALSE),
+('opensky_data', 'velocity', 'states[*][9]', 'FLOAT', FALSE),
+('opensky_data', 'on_ground', 'states[*][8]', 'BOOLEAN', FALSE)
 ON CONFLICT DO NOTHING;
 
 INSERT INTO dq_rules (source_id, rule_name, rule_logic, action_on_fail, severity) 

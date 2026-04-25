@@ -162,12 +162,12 @@ async def set_blueprints(source_id: str, blueprints: List[MappingBlueprintCreate
     You must submit a JSON Array (`[...]`) containing one or more blueprint objects. Use this structure to map your data:
     
     * **`target_field`** *(string)*: The final mathematical column name you want in your Iceberg Lakehouse (e.g. `latitude` or `base_name`).
-    * **`json_path`** *(string)*: The JSONPath syntax used to hunt down the value inside the raw payload. 
-        * *Example 1:* Raw payload is `{"user": {"id": 5}}` -> Enter `$.user.id`.
-        * *Example 2:* Array element `{"tags": ["military", "base"]}` -> `$.tags[0]`.
+    * **`jmes_path`** *(string)*: The JMESPath syntax used to hunt down the value inside the raw payload. 
+        * *Example 1:* Raw payload is `{"user": {"id": 5}}` -> Enter `user.id`.
+        * *Example 2:* Array element `{"tags": ["military", "base"]}` -> `tags[0]`.
     * **`data_type`** *(string)*: Forces the system to cast the extracted string into a strict Database Schema type before saving it to Parquet. Valid options: `STRING`, `INT`, `FLOAT`, `BOOLEAN`, `BIGINT`, `TIMESTAMP`.
     * **`is_primary_key`** *(boolean)*: If true, tells the system this row is unique (e.g., `base_id`).
-    * **`is_required`** *(boolean)*: **Powerful Gatekeeper.** If true, and the `json_path` extracts a `null` or missing value, the system will instantly reject and quarantine the row!
+    * **`is_required`** *(boolean)*: **Powerful Gatekeeper.** If true, and the `jmes_path` extracts a `null` or missing value, the system will instantly reject and quarantine the row!
     * **`default_value`** *(string, optional)*: If the extraction fails but `is_required` is false, it uses this safely.
     
     ### ⚠️ Warnings & Constraints
