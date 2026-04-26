@@ -238,7 +238,20 @@ export default function ApiWizard() {
   };
 
   const reset = () => { setStep(0); setHighest(0); setResult(null); setPreview(null); setPreviewErr(null); setBPs([blankBP()]); setRules([]); setBpSaved(false); setStepStatus({}); setActLog([]); setForm({ source_id:'', api_url:'', method:'GET', headers:'', body_template:'', poll_interval_seconds:300, description:'' }); setScript(''); setScriptActive(false); };
-  const canNext = () => { if (step===0) return form.source_id.trim().length>0; if (step===1) return preview && preview.total_records>0; if (step===2) return bpSaved; return true; };
+  const canNext = () => { 
+    if (step === 0) return form.source_id.trim().length > 0; 
+    if (step === 1) return preview && preview.total_records > 0; 
+    if (step === 2) return bpSaved || scriptActive; 
+    return true; 
+  };
+
+  const handleSetBPs = (updater) => {
+    setBPs(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      setBpSaved(false);
+      return next;
+    });
+  };
   // eslint-disable-next-line no-unused-vars
   const upd = (i,k,v) => { setBPs(a=>a.map((b,j)=>j===i?{...b,[k]:v}:b)); setBpSaved(false); };
 
@@ -332,7 +345,7 @@ export default function ApiWizard() {
           sourceId={form.source_id}
           preview={preview}
           bps={bps} 
-          setBPs={setBPs} 
+          setBPs={handleSetBPs} 
           bpSaving={bpSaving} 
           bpSaved={bpSaved} 
           saveBPs={saveBPs} 

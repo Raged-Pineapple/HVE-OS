@@ -11,8 +11,10 @@ from urllib3.util.retry import Retry
 
 from fastapi import APIRouter, HTTPException, Query
 from models import PipelineTrace, DebugTraceRequest, StageTrace, StageStatus, RawAPIRequest, RawAPIResponse, RawAPIPreviewInfo, AuthType
-from services import db_service
+from services import db_service, minio_service, iceberg_service
+from services.neo4j_service import get_neo4j_service
 from services.debug_pipeline import DebugPipeline
+from processors.api_poller import get_poller
 
 logger = logging.getLogger(__name__)
 
@@ -364,3 +366,56 @@ async def fetch_raw_api(request: RawAPIRequest):
     except Exception as e:
         logger.error(f"Raw API probe failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post(
+    "/factory-reset",
+    summary="NUCLEAR: Factory Reset Data Lakehouse",
+    description="""
+    Wipes all data from MinIO (Bronze/Silver/DLQ), drops all Iceberg tables, 
+    and clears the Neo4j Graph. 
+    
+    By default, it preserves your source registrations and blueprints. 
+    Set `keep_config=false` to wipe everything and start from a blank slate.
+    """
+)
+async def factory_reset(keep_config: bool = True):
+    """Global data wipe across MinIO, Iceberg, Neo4j, and Postgres."""
+    try:
+        # 1. Stop all pollers
+        await get_poller().stop()
+        
+        # 2. Wipe MinIO
+        minio_service.clear_all_buckets()
+        
+        # 3. Wipe Iceberg
+        iceberg_service.drop_all_tables()
+        
+        # 4. Wipe Neo4j
+        get_neo4j_service().wipe_graph()
+        
+        # 5. Wipe Postgres Logs & Registries
+        db_service.wipe_all_data(keep_config=keep_config)
+        
+        # 5.5 Wipe Kafka Topics (create new admin client and delete)
+        try:
+            from confluent_kafka.admin import AdminClient
+            import os
+            admin = AdminClient({'bootstrap.servers': os.getenv("KAFKA_BROKERS", "localhost:9092")})
+            admin.delete_topics(["raw-telemetry", "silver-telemetry"])
+            logger.info("Kafka topics deleted (they will auto-recreate).")
+        except Exception as e:
+            logger.warning(f"Failed to wipe Kafka topics: {e}")
+
+        # 6. Restart pollers if config was kept
+        if keep_config:
+            await get_poller().start()
+            
+        return {
+            "status": "success",
+            "message": "Factory reset complete. " + 
+                       ("Config preserved, pollers restarted." if keep_config else "Total wipe complete.")
+        }
+    except Exception as e:
+        logger.error(f"Factory reset failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+

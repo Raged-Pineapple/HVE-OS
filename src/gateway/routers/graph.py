@@ -3,9 +3,10 @@ graph.py — Graph Mapping API
 Handles CRUD for Graph Blueprints and triggering manual Graph Syncs.
 """
 from fastapi import APIRouter, HTTPException, status, BackgroundTasks
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from models import GraphBlueprintCreate, GraphBlueprintInfo, GoldRegistryInfo
 from services import db_service
+from services.neo4j_service import get_neo4j_service
 from Logic import graph_processor
 
 router = APIRouter(tags=["Graph Mapping Blueprints"])
@@ -71,3 +72,23 @@ async def sync_graph(source_id: str, background_tasks: BackgroundTasks):
         "status": "ACCEPTED",
         "message": f"Graph Sync triggered for {source_id}."
     }
+
+@router.get("/entities/{source_id}")
+async def get_entities(source_id: str, limit: int = 100):
+    """
+    **Get Graph Entities by Source ID**
+    Fetch entities from the Neo4j Knowledge Graph that belong to a specific source.
+    """
+    neo4j = get_neo4j_service()
+    
+    query = """
+    MATCH (e:Entity)-[:PART_OF_SOURCE]->(s:Source {source_id: $source_id})
+    RETURN properties(e) as props
+    LIMIT $limit
+    """
+    try:
+        results = neo4j.execute_query(query, {"source_id": source_id, "limit": limit})
+        return [r["props"] for r in results]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Neo4j Error: {str(e)}")
+

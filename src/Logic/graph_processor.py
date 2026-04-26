@@ -128,11 +128,45 @@ class GraphProcessor:
             return cached[0]
         try:
             bp = db_service.get_graph_blueprint(source_id)
+            if not bp:
+                # ── SMART DEFAULT LOGIC ──
+                # If no blueprint exists, we use the "Name Logic" to create a standard 
+                # entity mapping that mirrors the Silver Table structure.
+                label = "".join(word.capitalize() for word in source_id.split("_"))
+                # ── SMART DEFAULT TEMPLATE ──
+                # We merge on _hve_id, apply all properties, and link to a Source node
+                # so the entities are discoverable via the /entities/{source_id} API.
+                default_template = (
+                    f"UNWIND $rows AS row "
+                    f"MERGE (s:Source {{ source_id: row._source_id }}) "
+                    f"MERGE (n:Entity:{label} {{ _hve_id: row._hve_id }}) "
+                    f"SET n += row "
+                    f"MERGE (n)-[:PART_OF_SOURCE]->(s)"
+                )
+                bp = {"source_id": source_id, "cypher_template": default_template, "is_default": True}
+            
             self._blueprint_cache[source_id] = (bp, time.time())
             return bp
         except Exception as e:
             logger.warning(f"Failed to fetch graph blueprint for {source_id}: {e}")
             return cached[0] if cached else None
+
+    def _sanitize_rows(self, rows: list) -> list:
+        """Neo4j does not allow nested Maps as properties. We JSON-serialize them."""
+        sanitized = []
+        for row in rows:
+            new_row = {}
+            for k, v in row.items():
+                # Neo4j allows primitives and arrays of primitives. 
+                # If it's a dict or a list containing dicts, we stringify it.
+                if isinstance(v, dict):
+                    new_row[k] = json.dumps(v)
+                elif isinstance(v, list) and any(isinstance(i, dict) for i in v):
+                    new_row[k] = json.dumps(v)
+                else:
+                    new_row[k] = v
+            sanitized.append(new_row)
+        return sanitized
 
     def _flush_buffer(self, source_id: str):
         messages = self._buffers.pop(source_id, [])
@@ -143,50 +177,15 @@ class GraphProcessor:
         if bp:
             # Cypher template mode
             try:
-                self._neo4j.execute_write(bp["cypher_template"], {"rows": messages})
+                # ── SANITIZATION ──
+                # Ensure we don't send nested maps to Neo4j properties
+                safe_rows = self._sanitize_rows(messages)
+                self._neo4j.execute_write(bp["cypher_template"], {"rows": safe_rows})
                 logger.info(f"GraphProcessor: Batch of {len(messages)} applied via Blueprint for {source_id}")
             except Exception as e:
                 logger.error(f"GraphProcessor Blueprint execution failed for {source_id}: {e}")
         else:
-            # Fallback legacy mode
-            for row in messages:
-                self._process_row_fallback(row)
-
-    def _process_row_fallback(self, row: dict):
-        """Legacy fallback if no Cypher template exists."""
-        source_id = row.get("_source_id", "unknown")
-        label = "".join(word.capitalize() for word in source_id.split("_"))
-
-        callsign = row.get("callsign")
-        merge_key = None
-        
-        if callsign and str(callsign).strip():
-            row["callsign"] = str(callsign).strip()
-            merge_key = "callsign"
-
-        self._neo4j.upsert_entity(label, row, merge_key=merge_key)
-        
-        if "icao24" in row and row["icao24"]:
-             self._link_flight_data(row, merge_key)
-
-    def _link_flight_data(self, row: dict, merge_key: str = None):
-        """Specific logic for flight data to build trajectories (Fallback only)."""
-        icao24 = row["icao24"]
-        m_key = merge_key or "_hve_id"
-        m_val = row.get(m_key)
-        
-        safe_key = "".join(c for c in m_key if c.isalnum() or c == '_')
-        
-        query = f"""
-        MERGE (a:Aircraft {{ icao24: $icao24 }})
-        WITH a
-        MATCH (e:Entity {{ {safe_key}: $m_val }})
-        MERGE (a)-[:PRODUCED_OBSERVATION]->(e)
-        """
-        try:
-            self._neo4j.execute_write(query, {"icao24": icao24, "m_val": m_val})
-        except Exception as e:
-            pass
+            logger.warning(f"GraphProcessor: No blueprint found for {source_id}. Skipping Graph ingestion.")
 
     def sync_table_to_graph(self, source_id: str):
         """Batch sync from Silver via DuckDB."""

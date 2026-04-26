@@ -126,6 +126,14 @@ class Neo4jService:
         except Exception as e:
             logger.error(f"Failed to upsert Neo4j entity with {m_key}={m_val}: {e}")
 
+    def wipe_graph(self):
+        """NUCLEAR: Deletes all nodes and relationships."""
+        if not Neo4jService._driver:
+            logger.error("Neo4j driver not initialized.")
+            return
+        self.execute_write("MATCH (n) DETACH DELETE n")
+        logger.info("Neo4j graph wiped.")
+
 # Singleton instance
 _service = None
 

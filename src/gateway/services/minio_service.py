@@ -41,6 +41,19 @@ def ensure_buckets():
         except S3Error as e:
             logger.warning(f"Bucket check/create for {bucket}: {e}")
 
+def clear_all_buckets():
+    """Wipes all data from Bronze, Silver, and DLQ buckets."""
+    for bucket in [BRONZE_BUCKET, SILVER_BUCKET, DLQ_BUCKET]:
+        try:
+            if minio_client.bucket_exists(bucket):
+                objects = minio_client.list_objects(bucket, recursive=True)
+                # Group deletes to avoid overhead if many objects exist
+                for obj in objects:
+                    minio_client.remove_object(bucket, obj.object_name)
+                logger.info(f"Cleared bucket: {bucket}")
+        except S3Error as e:
+            logger.warning(f"Failed to clear bucket {bucket}: {e}")
+
 
 # ============================================================
 # PRE-SIGNED URL (Stage 1: Batch Upload Bypass)

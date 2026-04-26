@@ -99,7 +99,7 @@ def _convert_to_pyarrow_iceberg(rows: List[Dict[str, Any]], schema: Schema) -> p
         key = field.name
         values = [row.get(key) for row in rows]
         
-        if isinstance(field.field_type, IntegerType):
+        if isinstance(field.field_type, (IntegerType, LongType)):
             # Self-healing: cast to int if it arrived as a string
             casted_values = []
             for v in values:
@@ -238,4 +238,17 @@ def drop_table(source_id: str) -> bool:
         return False
     except Exception as e:
         logger.error(f"Failed to drop Iceberg table {table_identifier}: {e}")
+        return False
+
+def drop_all_tables():
+    """Drops all Iceberg tables in our namespace."""
+    catalog = get_catalog()
+    try:
+        tables = catalog.list_tables(ICEBERG_NAMESPACE)
+        for table_id in tables:
+            catalog.drop_table(table_id, purge_requested=True)
+            logger.info(f"Dropped Iceberg table: {table_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to drop all Iceberg tables: {e}")
         return False

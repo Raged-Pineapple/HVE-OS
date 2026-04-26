@@ -153,6 +153,8 @@ def delete_source(source_id: str) -> bool:
         cur.execute("DELETE FROM silver_registry WHERE source_id = %s OR table_name = %s", (source_id, source_id))
 
         # 3. Delete the primary source record (cascades to blueprints/rules via DB foreign keys)
+        cur.execute("DELETE FROM source_registry WHERE source_id = %s", (source_id,))
+        return cur.rowcount > 0
 
 # ============================================================
 # MAPPING SCRIPT CRUD
@@ -463,10 +465,41 @@ def log_processing_complete(log_id: int, silver_path: str, records_in: int,
     """Log the completion of a processing run."""
     with get_cursor() as cur:
         cur.execute("""
-            UPDATE processing_log SET
-                silver_path = %s, records_in = %s, records_passed = %s,
-                records_quarantined = %s, status = %s, error_message = %s,
-                completed_at = CURRENT_TIMESTAMP
-            WHERE log_id = %s
-        """, (silver_path, records_in, records_passed, records_quarantined,
-              status, error_message, log_id))
+                UPDATE processing_log SET
+                    silver_path = %s, records_in = %s, records_passed = %s,
+                    records_quarantined = %s, status = %s, error_message = %s,
+                    completed_at = CURRENT_TIMESTAMP
+                WHERE log_id = %s
+            """, (silver_path, records_in, records_passed, records_quarantined,
+                  status, error_message, log_id))
+
+def wipe_all_data(keep_config: bool = True):
+    """
+    Global wipe of all operational data.
+    If keep_config is False, it also wipes source_registry (everything).
+    """
+    with get_cursor() as cur:
+        # 1. Wipe Materialized Graph Registry
+        cur.execute("DELETE FROM gold_registry")
+        
+        # 2. Wipe Processing & DQ Logs
+        cur.execute("DELETE FROM processing_log")
+        cur.execute("DELETE FROM dq_quarantine_log")
+        if "iceberg_snapshot_log" in [t['table_name'] for t in get_all_tables(cur)]: # Check if table exists
+             cur.execute("DELETE FROM iceberg_snapshot_log")
+        
+        # 3. Wipe Silver Registry
+        cur.execute("DELETE FROM silver_registry")
+        
+        if not keep_config:
+            # NUCLEAR OPTION: Wipe all sources, blueprints, and rules
+            cur.execute("DELETE FROM source_registry")
+
+def get_all_tables(cur):
+    """Helper to list all tables in public schema."""
+    cur.execute("""
+        SELECT table_name 
+        FROM information_schema.tables 
+        WHERE table_schema = 'public'
+    """)
+    return cur.fetchall()

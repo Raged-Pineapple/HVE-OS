@@ -159,11 +159,12 @@ class StreamProcessor:
 
             # ── Stage 3: Fetch blueprints from Control Plane ──
             blueprints = self._get_blueprints(source_id)
+            mapping_script = db_service.get_mapping_script(source_id)
             dq_rules = self._get_dq_rules(source_id)
 
             # ── Stage 4: Transform + DQ Gate ──
-            if not blueprints:
-                logger.warning(f"[{source_id}] No blueprints defined! Skipping Silver processing. Data safely stored in Bronze.")
+            if not blueprints and not mapping_script:
+                logger.warning(f"[{source_id}] No blueprints or script defined! Skipping Silver processing. Data safely stored in Bronze.")
                 if log_id:
                     db_service.log_processing_complete(
                         log_id=log_id,
@@ -172,12 +173,12 @@ class StreamProcessor:
                         records_passed=0,
                         records_quarantined=0,
                         status="SKIPPED",
-                        error_message="Manual Blueprint required for Silver layer processing."
+                        error_message="Blueprint or Mapping Script required for Silver layer processing."
                     )
                 return
 
             clean_rows, quarantined = self._transform_and_gate(
-                source_id, messages, blueprints, dq_rules
+                source_id, messages, blueprints, mapping_script, dq_rules
             )
 
             silver_path = None
@@ -267,7 +268,7 @@ class StreamProcessor:
 
 
     def _transform_and_gate(self, source_id: str, messages: list,
-                            blueprints: list, dq_rules: list) -> tuple:
+                            blueprints: list, mapping_script: str, dq_rules: list) -> tuple:
         """
         Apply mapping blueprints and DQ rules to a batch of messages.
         Returns (clean_rows, quarantined_records).
@@ -278,15 +279,18 @@ class StreamProcessor:
         for msg in messages:
             # ── 3. Transform: Apply Blueprints or Custom Script via Unified Service ──
             payload = msg.get("payload", msg)
-            mapping_script = db_service.get_mapping_script(source_id)
+            
             if mapping_script:
-                rows = mapping_service.run_script(
+                result = mapping_service.run_script(
                     payload,
                     source_id,
                     mapping_script,
                     ingest_ts=msg.get("ingest_timestamp"),
                     base_hve_id=msg.get("hve_id")
                 )
+                rows = result.get("rows", [])
+                if result.get("error"):
+                    logger.warning(f"[{source_id}] Mapping Script error: {result['error']}")
             else:
                 rows = mapping_service.apply_blueprints(
                     payload, 
