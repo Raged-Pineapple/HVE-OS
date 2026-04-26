@@ -219,13 +219,35 @@ class DebugPipeline:
                 auto_generated = False
 
             # Apply blueprints to build mapped rows (handles explosion) via shared service
-            mapped_rows = mapping_service.apply_blueprints(
-                self.payload, 
-                self.source_id, 
-                blueprints, 
-                ingest_ts=self._envelope.ingest_timestamp,
-                base_hve_id=self._envelope.hve_id
-            )
+            mapping_script = db_service.get_mapping_script(self.source_id)
+            script_logs = None
+            if mapping_script:
+                script_result = mapping_service.run_script(
+                    self.payload,
+                    self.source_id,
+                    mapping_script,
+                    ingest_ts=self._envelope.ingest_timestamp,
+                    base_hve_id=self._envelope.hve_id
+                )
+                mapped_rows = script_result["rows"]
+                script_logs = script_result["logs"]
+                if script_result["error"]:
+                    self.stages["stage_4_transform"] = StageTrace(
+                        status=StageStatus.FAILED,
+                        duration_ms=round((time.time() - t) * 1000, 2),
+                        detail={"logs": script_logs},
+                        error=script_result["error"]
+                    )
+                    return
+            else:
+                mapped_rows = mapping_service.apply_blueprints(
+                    self.payload, 
+                    self.source_id, 
+                    blueprints, 
+                    ingest_ts=self._envelope.ingest_timestamp,
+                    base_hve_id=self._envelope.hve_id
+                )
+            
             # Use the first row for DQ evaluation
             mapped_row = mapped_rows[0] if mapped_rows else {}
 
@@ -261,6 +283,7 @@ class DebugPipeline:
                     "rule_results": rule_results,
                     "mapped_row": mapped_row,
                     "mapped_rows": mapped_rows,
+                    "logs": script_logs,
                     "outcome": "CLEAN" if not failed else "QUARANTINED",
                     "fail_reason": fail_reason
                 }

@@ -276,15 +276,25 @@ class StreamProcessor:
         quarantined = []
 
         for msg in messages:
-            # ── 3. Transform: Apply Blueprints via Unified Service ──
+            # ── 3. Transform: Apply Blueprints or Custom Script via Unified Service ──
             payload = msg.get("payload", msg)
-            rows = mapping_service.apply_blueprints(
-                payload, 
-                source_id, 
-                blueprints, 
-                ingest_ts=msg.get("ingest_timestamp"),
-                base_hve_id=msg.get("hve_id")
-            )
+            mapping_script = db_service.get_mapping_script(source_id)
+            if mapping_script:
+                rows = mapping_service.run_script(
+                    payload,
+                    source_id,
+                    mapping_script,
+                    ingest_ts=msg.get("ingest_timestamp"),
+                    base_hve_id=msg.get("hve_id")
+                )
+            else:
+                rows = mapping_service.apply_blueprints(
+                    payload, 
+                    source_id, 
+                    blueprints, 
+                    ingest_ts=msg.get("ingest_timestamp"),
+                    base_hve_id=msg.get("hve_id")
+                )
 
             for row in rows:
                 # Apply DQ Rules (Gatekeeper)

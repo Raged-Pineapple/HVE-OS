@@ -1,4 +1,8 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
+import CodeMirror from '@uiw/react-codemirror';
+import { python } from '@codemirror/lang-python';
+import { githubLight } from '@uiw/codemirror-theme-github';
+import { vscodeDark } from '@uiw/codemirror-theme-vscode';
 
 const TYPES = ['STRING', 'INT', 'FLOAT', 'BOOLEAN', 'BIGINT', 'TIMESTAMP'];
 
@@ -250,9 +254,59 @@ function PathTokens({ tokens, onChange }) {
 
 // ─── Main Canvas ─────────────────────────────────────────────────────
 
-export default function JMESPathCanvas({ preview, bps, setBPs, saveBPs, bpSaving, bpSaved, silverPreview }) {
+export default function JMESPathCanvas({ 
+  sourceId, preview, bps, setBPs, saveBPs, bpSaving, bpSaved, silverPreview, refreshPreview,
+  script, setScript, scriptActive, scriptSaving, saveScript, clearScript,
+  scriptLogs, scriptError
+}) {
 
   const rawData = preview?.preview?.[0] || null;
+  const [tab, setTab] = useState('blueprints'); // 'blueprints' | 'script'
+  const [scriptSaved, setScriptSaved] = useState(false);
+
+  const onSaveScript = async () => {
+    await saveScript(script);
+    setScriptSaved(true);
+    setTimeout(() => setScriptSaved(false), 2500);
+  };
+
+  const generateTemplate = () => {
+    if (!rawData) return "# No data available to generate template";
+
+    if (Array.isArray(rawData) && rawData.length > 0) {
+      const first = rawData[0];
+      if (typeof first === 'object' && first !== null) {
+        const keys = Object.keys(first).filter(k => typeof first[k] !== 'object' || first[k] === null).slice(0, 5);
+        const mapping = keys.map(k => `        '${k}': item.get('${k}')`).join(',\n');
+        return `# Auto-generated template for root array\nfor item in payload:\n    rows.append({\n${mapping}\n    })`;
+      }
+    }
+
+    if (typeof rawData === 'object' && rawData !== null) {
+      let targetArrayKey = null;
+      let targetArray = null;
+      for (const [key, val] of Object.entries(rawData)) {
+        if (Array.isArray(val) && val.length > 0 && typeof val[0] === 'object') {
+          targetArrayKey = key;
+          targetArray = val;
+          break;
+        }
+      }
+
+      if (targetArrayKey && targetArray) {
+        const first = targetArray[0];
+        const keys = Object.keys(first).filter(k => typeof first[k] !== 'object' || first[k] === null).slice(0, 5);
+        const mapping = keys.map(k => `        '${k}': item.get('${k}')`).join(',\n');
+        return `# Auto-generated template for nested array '${targetArrayKey}'\nfor item in get('${targetArrayKey}') or []:\n    rows.append({\n${mapping}\n    })`;
+      }
+
+      const keys = Object.keys(rawData).filter(k => typeof rawData[k] !== 'object' || rawData[k] === null).slice(0, 8);
+      const mapping = keys.map(k => `    '${k}': get('${k}')`).join(',\n');
+      return `# Auto-generated template for flat JSON\nrows.append({\n${mapping}\n})`;
+    }
+
+    return "# Could not generate a specific template for this payload format";
+  };
 
   // Compute mapped paths set (normalise wildcards to [0] for comparison)
   const mappedPaths = new Set(
@@ -315,21 +369,132 @@ export default function JMESPathCanvas({ preview, bps, setBPs, saveBPs, bpSaving
         </div>
       </div>
 
-      {/* ── RIGHT: Blueprint Builder ──────────────────────────────── */}
-      <div style={{ flex: 1, minWidth: 0, background: 'var(--bg-surface)', border: '1px solid var(--border-default)', borderRadius: 12, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* ── RIGHT: Blueprint Builder / Script Editor ─────────────── */}
+      <div style={{ flex: 1, minWidth: 0, background: 'var(--bg-surface)', border: `1px solid ${scriptActive ? 'var(--cyan)' : 'var(--border-default)'}`, borderRadius: 12, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: 2 }}>JMESPath Blueprint Builder</div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              {bps.filter(b => b.jmes_path).length} fields mapped — click <code style={{ background: 'var(--bg-elevated)', padding: '1px 4px', borderRadius: 3 }}>[0]</code> tokens to toggle <code style={{ background: 'var(--cyan-dim)', color: 'var(--cyan)', padding: '1px 4px', borderRadius: 3 }}>[*]</code> wildcard
-            </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {/* Tab switcher */}
+            {['blueprints', 'script'].map(t => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                style={{
+                  background: tab === t ? (t === 'script' ? 'var(--cyan-dim)' : 'var(--bg-elevated)') : 'transparent',
+                  border: `1px solid ${tab === t ? (t === 'script' ? 'var(--cyan)' : 'var(--border-default)') : 'transparent'}`,
+                  color: tab === t ? (t === 'script' ? 'var(--cyan)' : 'var(--text-primary)') : 'var(--text-muted)',
+                  borderRadius: 6, padding: '4px 12px', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer'
+                }}
+              >
+                {t === 'blueprints' ? '⚡ JMESPath Blueprints' : `🐍 Python Script${scriptActive ? ' ●' : ''}`}
+              </button>
+            ))}
           </div>
-          <button className="btn btn-primary" onClick={saveBPs} disabled={bpSaving || bps.filter(b => b.jmes_path).length === 0}>
-            {bpSaving ? <span className="spinner" /> : bpSaved ? '✓ Saved' : '💾 Save Blueprints'}
-          </button>
+          {tab === 'blueprints' ? (
+            <button className="btn btn-primary" onClick={saveBPs} disabled={bpSaving || bps.filter(b => b.jmes_path).length === 0}>
+              {bpSaving ? <span className="spinner" /> : bpSaved ? '✓ Saved' : '💾 Save Blueprints'}
+            </button>
+          ) : (
+            <div style={{ display: 'flex', gap: 8 }}>
+              {scriptActive && <button onClick={clearScript} style={{ background: 'transparent', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', borderRadius: 6, padding: '4px 10px', fontSize: '0.78rem', cursor: 'pointer' }}>Clear Script</button>}
+              <button className="btn btn-primary" onClick={onSaveScript} disabled={scriptSaving}>
+                {scriptSaving ? <span className="spinner" /> : scriptSaved ? '✓ Saved' : '🐍 Save Script'}
+              </button>
+            </div>
+          )}
         </div>
 
-        <div style={{ overflowY: 'auto', flex: 1, padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {/* ── Script Editor Panel ── */}
+        {tab === 'script' && (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg-surface)' }}>
+            {/* Editor Header */}
+            <div style={{ padding: '8px 16px', background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-default)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Python Executor v1.0</span>
+                {scriptActive && <span style={{ padding: '2px 6px', background: 'var(--emerald-dim)', border: '1px solid var(--emerald)', color: 'var(--emerald)', borderRadius: 4, fontSize: '0.6rem', fontWeight: 700 }}>ACTIVE</span>}
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button 
+                  onClick={() => {
+                    setScript(generateTemplate());
+                  }}
+                  style={{ background: 'transparent', border: '1px solid var(--border-default)', color: 'var(--text-secondary)', padding: '3px 8px', borderRadius: 4, fontSize: '0.65rem', cursor: 'pointer' }}
+                >
+                  Paste Template
+                </button>
+                <button 
+                  onClick={() => { navigator.clipboard.writeText(script); toast('Copied to clipboard!', 'success'); }}
+                  style={{ background: 'var(--bg-hover)', border: '1px solid var(--border-default)', color: 'var(--text-primary)', padding: '3px 10px', borderRadius: 4, fontSize: '0.65rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                >
+                  <span>📋</span> Copy
+                </button>
+              </div>
+            </div>
+
+            <div style={{ padding: '10px 16px', background: 'var(--bg-surface)', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+              Available: <code style={{ color: 'var(--amber)' }}>get(path)</code>, <code style={{ color: 'var(--amber)' }}>payload</code>, <code style={{ color: 'var(--amber)' }}>rows</code>, <code style={{ color: 'var(--amber)' }}>uuid</code>, <code style={{ color: 'var(--amber)' }}>json</code>, <code style={{ color: 'var(--amber)' }}>datetime</code>
+            </div>
+
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <style>{`
+                .cm-editor { height: 100%; outline: none !important; }
+                .cm-scroller { font-family: 'JetBrains Mono', monospace !important; font-size: 0.85rem; line-height: 1.6; }
+                .cm-focused { outline: none !important; }
+                .cm-gutters { border-right: 1px solid var(--border-subtle) !important; background-color: transparent !important; color: var(--text-muted) !important; opacity: 0.7; }
+                .cm-activeLineGutter { background-color: var(--bg-hover) !important; color: var(--text-primary) !important; }
+                .cm-activeLine { background-color: transparent !important; }
+              `}</style>
+              <CodeMirror
+                value={script}
+                height="100%"
+                theme={document.documentElement.getAttribute('data-theme') === 'dark' ? vscodeDark : githubLight}
+                extensions={[python()]}
+                onChange={(value) => setScript(value)}
+                basicSetup={{
+                  lineNumbers: true,
+                  foldGutter: true,
+                  dropCursor: true,
+                  allowMultipleSelections: true,
+                  indentOnInput: true,
+                  highlightActiveLine: true,
+                  highlightActiveLineGutter: true,
+                }}
+              />
+            </div>
+
+            {/* LeetCode-style Console Output */}
+            {(scriptLogs || scriptError) && (
+              <div style={{ 
+                height: '180px', 
+                borderTop: '1px solid var(--border-default)', 
+                background: 'var(--bg-elevated)', 
+                display: 'flex', 
+                flexDirection: 'column' 
+              }}>
+                <div style={{ padding: '6px 16px', background: 'var(--bg-hover)', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Console</span>
+                  {scriptError && <span style={{ padding: '2px 6px', background: 'var(--rose-dim)', color: 'var(--rose)', borderRadius: 4, fontSize: '0.6rem', fontWeight: 700 }}>RUNTIME ERROR</span>}
+                </div>
+                <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.75rem', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+                  {scriptError && (
+                    <div style={{ color: 'var(--rose)', marginBottom: 8, padding: 8, background: 'var(--rose-dim)', borderRadius: 4, border: '1px solid var(--rose)' }}>
+                      {scriptError}
+                    </div>
+                  )}
+                  {scriptLogs && (
+                    <div style={{ color: 'var(--text-primary)' }}>
+                      {scriptLogs}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Blueprint Builder Panel ── */}
+        {tab === 'blueprints' && (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div style={{ overflowY: 'auto', flex: 1, padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
 
           {bps.map((bp, i) => {
             const tokens = pathToTokens(bp.jmes_path);
@@ -352,10 +517,27 @@ export default function JMESPathCanvas({ preview, bps, setBPs, saveBPs, bpSaving
                   />
                 </div>
 
-                {/* Visual JMESPath token display */}
+                {/* Manual JMESPath Editor */}
                 <div style={{ background: 'var(--bg-surface)', borderRadius: 7, padding: '8px 12px', marginBottom: 12, border: '1px solid var(--border-subtle)' }}>
-                  <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em' }}>JMESPath</div>
-                  <PathTokens tokens={tokens} onChange={(newPath) => updatePath(i, newPath)} />
+                  <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>JMESPath</span>
+                    <span style={{ fontSize: '0.55rem', opacity: 0.6 }}>Supports ||, projections, and filters</span>
+                  </div>
+                  <input
+                    value={bp.jmes_path}
+                    onChange={e => updatePath(i, e.target.value)}
+                    placeholder="e.g. elements[*].id"
+                    style={{
+                      width: '100%',
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--cyan)',
+                      fontFamily: 'JetBrains Mono',
+                      fontSize: '0.8rem',
+                      outline: 'none',
+                      padding: '4px 0'
+                    }}
+                  />
                 </div>
 
                 {/* Controls */}
@@ -382,6 +564,10 @@ export default function JMESPathCanvas({ preview, bps, setBPs, saveBPs, bpSaving
                     <input type="checkbox" checked={bp.should_explode !== false} onChange={e => updateBP(i, 'should_explode', e.target.checked)} />
                     <span style={{ color: bp.should_explode !== false ? 'var(--cyan)' : 'var(--text-muted)', fontWeight: bp.should_explode !== false ? 600 : 400 }}>Explode Array</span>
                   </label>
+                  <label style={{ fontSize: '0.72rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', background: 'var(--bg-surface)', padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border-subtle)' }}>
+                    <input type="checkbox" checked={bp.nested_explode !== false} onChange={e => updateBP(i, 'nested_explode', e.target.checked)} />
+                    <span style={{ color: bp.nested_explode !== false ? 'var(--cyan)' : 'var(--text-muted)', fontWeight: bp.nested_explode !== false ? 600 : 400 }}>Deep Explode (Nested)</span>
+                  </label>
                 </div>
               </div>
             );
@@ -394,7 +580,9 @@ export default function JMESPathCanvas({ preview, bps, setBPs, saveBPs, bpSaving
               <div style={{ fontSize: '0.8rem' }}>Each click creates a blueprint field.<br />Expand arrays to map nested values.</div>
             </div>
           )}
+          </div>
         </div>
+        )}
       </div>
 
       {/* ── RIGHT: Silver Table Preview ──────────────────────────────── */}
@@ -408,24 +596,39 @@ export default function JMESPathCanvas({ preview, bps, setBPs, saveBPs, bpSaving
           </div>
         </div>
         <div style={{ overflowY: 'auto', flex: 1, padding: 16 }}>
-          {silverPreview ? (
+          {silverPreview ? (() => {
+            const rows = Array.isArray(silverPreview) ? silverPreview : [silverPreview];
+            const allKeys = Object.keys(rows[0] || {});
+            // Sort keys: metadata (_ prefix) first, then others
+            const sortedKeys = [...allKeys].sort((a, b) => {
+              const aMeta = a.startsWith('_');
+              const bMeta = b.startsWith('_');
+              if (aMeta && !bMeta) return -1;
+              if (!aMeta && bMeta) return 1;
+              return 0; // maintain order otherwise
+            });
+
+            return (
             <div style={{ borderRadius: 8, border: '1px solid var(--border-subtle)', overflowX: 'auto', background: 'var(--bg-elevated)' }}>
               <table style={{ borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.75rem', whiteSpace: 'nowrap', minWidth: '100%' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-surface)', borderBottom: '1px solid var(--border-subtle)' }}>
-                    {Object.keys(Array.isArray(silverPreview) ? (silverPreview[0] || {}) : silverPreview).map(k => (
-                      <th key={k} style={{ padding: '8px 12px', color: 'var(--text-muted)', fontWeight: 600, borderRight: '1px solid var(--border-subtle)' }}>{k}</th>
+                    {sortedKeys.map(k => (
+                      <th key={k} style={{ padding: '8px 12px', color: k.startsWith('_') ? 'var(--cyan)' : 'var(--text-muted)', fontWeight: 600, borderRight: '1px solid var(--border-subtle)' }}>
+                        {k.startsWith('_') ? <span style={{ opacity: 0.7 }}>{k}</span> : k}
+                      </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {(Array.isArray(silverPreview) ? silverPreview : [silverPreview]).map((row, rowIdx) => (
+                  {rows.map((row, rowIdx) => (
                     <tr key={rowIdx} style={{ borderBottom: '1px solid var(--border-subtle)', background: rowIdx % 2 === 0 ? 'transparent' : 'var(--bg-hover)' }}>
-                      {Object.values(row).map((v, i) => {
+                      {sortedKeys.map((k, i) => {
+                        const v = row[k];
                         const isObj = typeof v === 'object' && v !== null;
                         const strVal = isObj ? JSON.stringify(v) : String(v);
                         return (
-                          <td key={i} title={strVal} style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono', color: isObj ? '#a78bfa' : 'var(--text-secondary)', fontSize: '0.72rem', borderRight: '1px solid var(--border-subtle)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          <td key={i} title={strVal} style={{ padding: '8px 12px', fontFamily: 'JetBrains Mono', color: k.startsWith('_') ? 'var(--cyan)' : (isObj ? '#a78bfa' : 'var(--text-secondary)'), fontSize: '0.72rem', borderRight: '1px solid var(--border-subtle)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {strVal}
                           </td>
                         );
@@ -435,11 +638,12 @@ export default function JMESPathCanvas({ preview, bps, setBPs, saveBPs, bpSaving
                 </tbody>
               </table>
             </div>
-          ) : (
+            );
+          })() : (
             <div style={{ textAlign: 'center', padding: '50px 20px', color: 'var(--text-muted)', border: '1px dashed var(--border-subtle)', borderRadius: 10 }}>
               <div style={{ fontSize: '2.5rem', marginBottom: 12 }}>💾</div>
               <div style={{ fontWeight: 600, marginBottom: 6 }}>No preview available</div>
-              <div style={{ fontSize: '0.8rem' }}>Click "Save Blueprints" to generate a live table preview.</div>
+              <div style={{ fontSize: '0.8rem' }}>Click "Save Blueprints" or "Save Script" to generate a live table preview.</div>
             </div>
           )}
         </div>

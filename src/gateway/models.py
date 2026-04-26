@@ -115,6 +115,7 @@ class MappingBlueprintCreate(BaseModel):
     is_required: bool = Field(True, description="If true, records missing this extraction will be instantly rejected from the pipeline.", examples=[True])
     default_value: Optional[str] = Field(None, description="Fallback value if the extraction path returns null.", examples=["Unknown"])
     should_explode: bool = Field(True, description="If the extracted value is a list, should it be exploded into multiple rows?", examples=[True])
+    nested_explode: bool = Field(True, description="If the extracted value is a nested list of lists, should it be deeply exploded?", examples=[True])
 
 class MappingBlueprintInfo(BaseModel):
     """Response model for a mapping blueprint."""
@@ -127,6 +128,7 @@ class MappingBlueprintInfo(BaseModel):
     is_required: bool
     default_value: Optional[str]
     should_explode: bool
+    nested_explode: bool
 
 
 # ============================================================

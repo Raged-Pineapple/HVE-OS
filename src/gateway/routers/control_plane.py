@@ -199,6 +199,43 @@ async def get_blueprints(source_id: str):
 
 
 # ============================================================
+# MAPPING SCRIPT (Power Mode)
+# ============================================================
+
+@router.get("/{source_id}/mapping-script")
+async def get_mapping_script(source_id: str):
+    """Get the custom Python mapping script for a source."""
+    script = db_service.get_mapping_script(source_id)
+    return {"source_id": source_id, "mapping_script": script}
+
+@router.put("/{source_id}/mapping-script")
+async def save_mapping_script(source_id: str, body: dict):
+    """
+    **Save a Custom Python Mapping Script (Power Mode)**
+
+    The script receives `payload` (the raw JSON) and must populate the `rows` list.
+    Each item in `rows` should be a dict with column names as keys.
+
+    Available variables: `payload`, `rows`, `uuid`, `json`, `jmespath`, `datetime`
+
+    Example:
+    ```python
+    for el in payload.get('elements', []):
+        base = {'id': el['id'], 'type': el['type']}
+        for pt in el.get('geometry', []):
+            rows.append({**base, 'lat': pt['lat'], 'lon': pt['lon']})
+        if not el.get('geometry'):
+            rows.append({**base, 'lat': el.get('lat'), 'lon': el.get('lon')})
+    ```
+
+    Set to `null` to revert back to JMESPath blueprints.
+    """
+    script = body.get("mapping_script")
+    db_service.save_mapping_script(source_id, script)
+    return {"source_id": source_id, "mapping_script": script, "status": "saved"}
+
+
+# ============================================================
 # DATA QUALITY RULES
 # ============================================================
 

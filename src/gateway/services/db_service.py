@@ -92,7 +92,12 @@ def ensure_graph_tables():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        logger.info("Checked/Created Stage 5 Gold Graph tables.")
+        # mapping_script column migration (idempotent)
+        cur.execute("""
+            ALTER TABLE source_registry 
+            ADD COLUMN IF NOT EXISTS mapping_script TEXT DEFAULT NULL
+        """)
+        logger.info("Checked/Created Stage 5 Gold Graph tables + mapping_script column.")
 
 # ============================================================
 # SOURCE REGISTRY CRUD
@@ -148,8 +153,28 @@ def delete_source(source_id: str) -> bool:
         cur.execute("DELETE FROM silver_registry WHERE source_id = %s OR table_name = %s", (source_id, source_id))
 
         # 3. Delete the primary source record (cascades to blueprints/rules via DB foreign keys)
-        cur.execute("DELETE FROM source_registry WHERE source_id = %s", (source_id,))
-        return cur.rowcount > 0
+
+# ============================================================
+# MAPPING SCRIPT CRUD
+# ============================================================
+
+def get_mapping_script(source_id: str) -> str | None:
+    """Get the custom Python mapping script for a source. Returns None if not set."""
+    with get_cursor() as cur:
+        cur.execute("SELECT mapping_script FROM source_registry WHERE source_id = %s", (source_id,))
+        row = cur.fetchone()
+        return row["mapping_script"] if row else None
+
+def save_mapping_script(source_id: str, script: str | None) -> None:
+    """Save or clear the custom Python mapping script for a source."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO source_registry (source_id, source_type, protocol, description, mapping_script)
+            VALUES (%s, 'STREAM', 'HTTP', 'Pre-registered via API Wizard', %s)
+            ON CONFLICT (source_id) DO UPDATE SET
+                mapping_script = EXCLUDED.mapping_script,
+                updated_at = CURRENT_TIMESTAMP
+        """, (source_id, script))
 
 # ============================================================
 # API SOURCE CONFIG CRUD
@@ -224,10 +249,10 @@ def add_blueprint(source_id: str, target_field: str, jmes_path: str,
     with get_cursor() as cur:
         cur.execute("""
             INSERT INTO mapping_blueprints 
-                (source_id, target_field, jmes_path, data_type, is_primary_key, is_required, default_value)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                (source_id, target_field, jmes_path, data_type, is_primary_key, is_required, default_value, nested_explode)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
-        """, (source_id, target_field, jmes_path, data_type, is_primary_key, is_required, default_value))
+        """, (source_id, target_field, jmes_path, data_type, is_primary_key, is_required, default_value, True))
         return dict(cur.fetchone())
 
 def get_blueprints(source_id: str) -> list:
@@ -267,13 +292,13 @@ def upsert_blueprints(source_id: str, blueprints: list) -> list:
 
             cur.execute("""
                 INSERT INTO mapping_blueprints 
-                    (source_id, target_field, jmes_path, data_type, is_primary_key, is_required, default_value, should_explode)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    (source_id, target_field, jmes_path, data_type, is_primary_key, is_required, default_value, should_explode, nested_explode)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
             """, (
                 source_id, bp["target_field"], path, bp["data_type"],
                 bp.get("is_primary_key", False), bp.get("is_required", True), bp.get("default_value"),
-                bp.get("should_explode", True)
+                bp.get("should_explode", True), bp.get("nested_explode", True)
             ))
             results.append(dict(cur.fetchone()))
         return results
