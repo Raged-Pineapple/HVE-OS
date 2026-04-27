@@ -73,6 +73,26 @@ async def sync_graph(source_id: str, background_tasks: BackgroundTasks):
         "status": "ACCEPTED",
         "message": f"Graph Sync triggered for {source_id}."
     }
+@router.get("/entities/label/{source_id}")
+async def get_entities_by_label(source_id: str, limit: int = 25):
+    """
+    **Get Graph Entities by Label**
+    Fetch entities from Neo4j using the capitalized source ID as the node label.
+    Example: source_id 'blr' -> MATCH (n:Blr) RETURN n LIMIT 25
+    """
+    neo4j = get_neo4j_service()
+    
+    # Capitalize source_id for label (e.g., 'blr' -> 'Blr')
+    label = source_id.capitalize()
+    
+    # Labels cannot be parameterized with $, so we format the string.
+    query = f"MATCH (n:{label}) RETURN properties(n) as props LIMIT $limit"
+    
+    try:
+        results = neo4j.execute_query(query, {"limit": limit})
+        return [r["props"] for r in results]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Neo4j Error: {str(e)}")
 
 @router.get("/entities/{source_id}")
 async def get_entities(source_id: str, limit: int = 100):
@@ -92,4 +112,37 @@ async def get_entities(source_id: str, limit: int = 100):
         return [r["props"] for r in results]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Neo4j Error: {str(e)}")
+
+@router.get("/sources")
+async def list_graph_sources():
+    """
+    **List All Graph Sources**
+    Retrieve all Source nodes from the Neo4j Knowledge Graph.
+    """
+    neo4j = get_neo4j_service()
+    query = "MATCH (s:Source) RETURN properties(s) as props"
+    try:
+        results = neo4j.execute_query(query)
+        return [r["props"] for r in results]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Neo4j Error: {str(e)}")
+
+@router.get("/entities/keys/{source_id}")
+async def get_entity_keys(source_id: str):
+    """
+    **Get All Property Keys for a Source**
+    Retrieves all unique property keys used by entities of a specific source label.
+    """
+    neo4j = get_neo4j_service()
+    label = source_id.capitalize()
+    query = f"MATCH (n:{label}) UNWIND keys(n) AS key RETURN DISTINCT key"
+    try:
+        results = neo4j.execute_query(query)
+        return [r["key"] for r in results]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Neo4j Error: {str(e)}")
+
+
+
+
 
