@@ -123,13 +123,7 @@
   margin-top: 8px;
 }
 
-.react-flow__handle {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background-color: var(--bg-color);
-  border: 2px solid var(--text-primary);
-}
+
 
 .deploy-btn {
   position: absolute;
@@ -152,4 +146,48 @@
 .deploy-btn:hover {
   transform: translateY(-2px);
   box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Settings Panel */
+.settings-panel .field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-panel label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.settings-panel input, 
+.settings-panel select, 
+.settings-panel textarea {
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  transition: border-color 0.2s;
+}
+
+.settings-panel input:focus, 
+.settings-panel select:focus, 
+.settings-panel textarea:focus {
+  outline: none;
+  border-color: var(--cyan);
+}
+
+.badge {
+  padding: 2px 6px;
+  background: var(--cyan-dim);
+  color: var(--cyan);
+  border-radius: 4px;
+  font-weight: 600;
 }

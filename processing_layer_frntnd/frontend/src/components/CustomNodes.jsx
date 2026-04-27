@@ -1,6 +1,6 @@
 import React, { memo, useState, useEffect } from 'react';
 import { Handle, Position } from 'reactflow';
-import { Database, Filter, Brain, Zap, ChevronDown, ChevronUp } from 'lucide-react';
+import { Database, Filter, Brain, Zap, ChevronDown, ChevronUp, Eye, EyeOff, Activity } from 'lucide-react';
 import { getEntityKeys } from '../api/client.js';
 
 const NodeWrapper = ({ label, subtext, icon: Icon, type, data, selected, children }) => (
@@ -23,6 +23,7 @@ const NodeWrapper = ({ label, subtext, icon: Icon, type, data, selected, childre
 export const DataTriggerNode = memo(({ data, selected }) => {
     const [keys, setKeys] = useState([]);
     const [isExpanded, setIsExpanded] = useState(false);
+    const [showMeta, setShowMeta] = useState(false);
 
     useEffect(() => {
         if (data.id && data.id !== "Unconfigured") {
@@ -32,12 +33,14 @@ export const DataTriggerNode = memo(({ data, selected }) => {
         }
     }, [data.id]);
 
+    const displayedKeys = showMeta ? keys : keys.filter(k => !k.startsWith('_'));
+
     return (
         <div className={`card custom-node input ${selected ? 'selected' : ''}`} style={{ minWidth: 200 }}>
             <div className="node-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Database size={18} color="var(--accent-blue)" />
-                    <span className="node-title" style={{ fontWeight: 600 }}>{data.id || "Data Source"}</span>
+                    <Activity size={18} color="var(--accent-blue)" />
+                    <span className="node-title" style={{ fontWeight: 600 }}>{data.id || "Logic Trigger"}</span>
                 </div>
                 <button 
                     onClick={() => setIsExpanded(!isExpanded)}
@@ -52,9 +55,19 @@ export const DataTriggerNode = memo(({ data, selected }) => {
                 
                 {isExpanded && (
                     <div style={{ marginTop: 12, borderTop: '1px solid var(--border-subtle)', paddingTop: 8 }}>
-                        <p style={{ fontSize: '0.6rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 6, paddingLeft: 4 }}>Graph Properties</p>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, paddingLeft: 4, paddingRight: 4 }}>
+                            <p style={{ fontSize: '0.6rem', color: 'var(--text-muted)', textTransform: 'uppercase', margin: 0 }}>Graph Properties</p>
+                            <button 
+                                onClick={() => setShowMeta(!showMeta)}
+                                style={{ background: 'none', border: 'none', color: showMeta ? 'var(--cyan)' : 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, padding: 0 }}
+                                title={showMeta ? "Hide Meta Attributes" : "Show Meta Attributes"}
+                            >
+                                {showMeta ? <Eye size={12} /> : <EyeOff size={12} />}
+                                <span style={{ fontSize: '0.55rem' }}>META</span>
+                            </button>
+                        </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            {keys.map((key) => (
+                            {displayedKeys.map((key) => (
                                 <div key={key} style={{ 
                                     position: 'relative', 
                                     padding: '4px 8px', 
@@ -71,10 +84,10 @@ export const DataTriggerNode = memo(({ data, selected }) => {
                                         position={Position.Left} 
                                         id={`${key}-target`} 
                                         style={{ 
-                                            left: -12, 
+                                            left: -13, 
                                             background: 'var(--accent-orange)', 
-                                            width: 8, 
-                                            height: 8,
+                                            width: 10, 
+                                            height: 10,
                                             border: '2px solid var(--bg-surface)' 
                                         }} 
                                     />
@@ -84,10 +97,10 @@ export const DataTriggerNode = memo(({ data, selected }) => {
                                         position={Position.Right} 
                                         id={`${key}-source`} 
                                         style={{ 
-                                            right: -12, 
+                                            right: -13, 
                                             background: 'var(--cyan)', 
-                                            width: 8, 
-                                            height: 8,
+                                            width: 10, 
+                                            height: 10,
                                             border: '2px solid var(--bg-surface)' 
                                         }} 
                                     />
@@ -99,8 +112,20 @@ export const DataTriggerNode = memo(({ data, selected }) => {
                 )}
             </div>
             
-            {!isExpanded && <Handle type="source" position={Position.Bottom} id="default-source" className="handle-bottom" />}
-            <Handle type="target" position={Position.Top} id="default-target" className="handle-top" />
+            {!isExpanded && (
+                <Handle 
+                    type="source" 
+                    position={Position.Right} 
+                    id="default-source" 
+                    style={{ 
+                        right: -8, 
+                        background: 'var(--cyan)', 
+                        width: 14, 
+                        height: 14, 
+                        border: '2px solid var(--bg-surface)' 
+                    }} 
+                />
+            )}
         </div>
     );
 });

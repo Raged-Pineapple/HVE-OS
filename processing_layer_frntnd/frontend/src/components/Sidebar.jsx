@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Database, Brain, Filter, Zap, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Database, Brain, Filter, Zap, ChevronLeft, ChevronRight, Activity, Sigma } from 'lucide-react';
 import { listGraphSources, getEntitiesByLabel } from '../api/client.js';
 
 const ImportsList = ({ onDragStart }) => {
@@ -40,9 +40,8 @@ const ImportsList = ({ onDragStart }) => {
 
     return (
         <div style={{ flex: 1, overflowY: 'auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <h3 style={{ fontSize: '0.78rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Sources</h3>
-                <button onClick={load} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--cyan)', fontSize: '0.9rem' }}>↺</button>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                <button onClick={load} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--cyan)', fontSize: '0.9rem', opacity: 0.7 }} title="Refresh Sources">↺</button>
             </div>
             {loading && <div style={{ display: 'flex', justifyContent: 'center', padding: 20 }}><span className="spinner" /></div>}
             {!loading && sources.length === 0 && <div className="empty-state" style={{ padding: 16, fontSize: '0.76rem' }}>No sources yet.</div>}
@@ -181,43 +180,125 @@ export default () => {
                 </button>
             </div>
 
-            <div style={{ display: 'flex', gap: 4, background: 'var(--bg-elevated)', padding: 4, borderRadius: 8 }}>
-                <button 
-                    onClick={() => setView('nodes')} 
-                    style={{ flex: 1, padding: '6px 12px', border: 'none', borderRadius: 6, background: view === 'nodes' ? 'var(--cyan-dim)' : 'transparent', color: view === 'nodes' ? 'var(--cyan)' : 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: view === 'nodes' ? 600 : 400 }}
-                >Nodes</button>
+            <div style={{ 
+                display: 'flex', 
+                gap: 8, 
+                overflowX: 'auto', 
+                paddingBottom: 12,
+                paddingTop: 4,
+                scrollbarWidth: 'none',
+                msOverflowStyle: 'none',
+                borderBottom: '1px solid var(--border-subtle)',
+                marginBottom: 12
+            }} className="hide-scrollbar">
                 <button 
                     onClick={() => setView('imports')} 
-                    style={{ flex: 1, padding: '6px 12px', border: 'none', borderRadius: 6, background: view === 'imports' ? 'var(--cyan-dim)' : 'transparent', color: view === 'imports' ? 'var(--cyan)' : 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: view === 'imports' ? 600 : 400 }}
-                >Imports</button>
+                    style={{ 
+                        flexShrink: 0, padding: '8px 14px', border: '1px solid var(--border-default)', borderRadius: 8, 
+                        background: view === 'imports' ? 'var(--cyan-dim)' : 'var(--bg-elevated)', 
+                        color: view === 'imports' ? 'var(--cyan)' : 'var(--text-secondary)', 
+                        cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
+                        borderColor: view === 'imports' ? 'var(--cyan)' : 'var(--border-default)'
+                    }}
+                >
+                    <Database size={14} color={view === 'imports' ? 'var(--cyan)' : 'var(--text-muted)'} />
+                    Sources
+                </button>
+
+                <button 
+                    onClick={() => setView('logic')} 
+                    style={{ 
+                        flexShrink: 0, padding: '8px 14px', border: '1px solid var(--border-default)', borderRadius: 8, 
+                        background: view === 'logic' ? 'var(--cyan-dim)' : 'var(--bg-elevated)', 
+                        color: view === 'logic' ? 'var(--cyan)' : 'var(--text-secondary)', 
+                        cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
+                        borderColor: view === 'logic' ? 'var(--cyan)' : 'var(--border-default)'
+                    }}
+                >
+                    <Activity size={14} color={view === 'logic' ? 'var(--cyan)' : 'var(--accent-blue)'} />
+                    Logic
+                </button>
+
+                <button 
+                    onClick={() => setView('ai')} 
+                    style={{ 
+                        flexShrink: 0, padding: '8px 14px', border: '1px solid var(--border-default)', borderRadius: 8, 
+                        background: view === 'ai' ? 'var(--cyan-dim)' : 'var(--bg-elevated)', 
+                        color: view === 'ai' ? 'var(--cyan)' : 'var(--text-secondary)', 
+                        cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
+                        borderColor: view === 'ai' ? 'var(--cyan)' : 'var(--border-default)'
+                    }}
+                >
+                    <Brain size={14} color={view === 'ai' ? 'var(--cyan)' : 'var(--accent-purple)'} />
+                    AI
+                </button>
+
+                <button 
+                    onClick={() => setView('decision')} 
+                    style={{ 
+                        flexShrink: 0, padding: '8px 14px', border: '1px solid var(--border-default)', borderRadius: 8, 
+                        background: view === 'decision' ? 'var(--cyan-dim)' : 'var(--bg-elevated)', 
+                        color: view === 'decision' ? 'var(--cyan)' : 'var(--text-secondary)', 
+                        cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
+                        borderColor: view === 'decision' ? 'var(--cyan)' : 'var(--border-default)'
+                    }}
+                >
+                    <Filter size={14} color={view === 'decision' ? 'var(--cyan)' : 'var(--accent-orange)'} />
+                    Decision
+                </button>
+
+                <button 
+                    onClick={() => setView('action')} 
+                    style={{ 
+                        flexShrink: 0, padding: '8px 14px', border: '1px solid var(--border-default)', borderRadius: 8, 
+                        background: view === 'action' ? 'var(--cyan-dim)' : 'var(--bg-elevated)', 
+                        color: view === 'action' ? 'var(--cyan)' : 'var(--text-secondary)', 
+                        cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
+                        borderColor: view === 'action' ? 'var(--cyan)' : 'var(--border-default)'
+                    }}
+                >
+                    <Zap size={14} color={view === 'action' ? 'var(--cyan)' : 'var(--accent-teal)'} />
+                    Action
+                </button>
             </div>
 
-            {view === 'nodes' ? (
-                <>
-                    <p>Drag nodes onto the canvas to construct your operational pipeline.</p>
-
-                    <div className="dndnode input" onDragStart={(e) => onDragStart(e, 'dataTrigger')} draggable>
-                        <Database size={16} color="var(--accent-blue)" />
-                        Data Trigger
-                    </div>
-
-                    <div className="dndnode ai" onDragStart={(e) => onDragStart(e, 'aiAnalysis')} draggable>
-                        <Brain size={16} color="var(--accent-purple)" />
-                        AI Analysis
-                    </div>
-
-                    <div className="dndnode decision" onDragStart={(e) => onDragStart(e, 'decision')} draggable>
-                        <Filter size={16} color="var(--accent-orange)" />
-                        Decision Engine
-                    </div>
-
-                    <div className="dndnode action" onDragStart={(e) => onDragStart(e, 'action')} draggable>
-                        <Zap size={16} color="var(--accent-teal)" />
-                        Action Node
-                    </div>
-                </>
-            ) : (
+            {view === 'imports' ? (
                 <ImportsList onDragStart={onDragStart} />
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        {view === 'logic' && (
+                            <div className="dndnode input" onDragStart={(e) => onDragStart(e, 'add')} draggable style={{ padding: '8px 12px', fontSize: '0.75rem', gap: 6, background: 'var(--bg-elevated)' }}>
+                                <Activity size={14} color="var(--accent-blue)" />
+                                Add
+                            </div>
+                        )}
+                        {view === 'ai' && (
+                            <div className="dndnode ai" onDragStart={(e) => onDragStart(e, 'aiAnalysis')} draggable style={{ padding: '8px 12px', fontSize: '0.75rem', gap: 6, background: 'var(--bg-elevated)' }}>
+                                <Brain size={14} color="var(--accent-purple)" />
+                                AI Analysis
+                            </div>
+                        )}
+                        {view === 'decision' && (
+                            <div className="dndnode decision" onDragStart={(e) => onDragStart(e, 'decision')} draggable style={{ padding: '8px 12px', fontSize: '0.75rem', gap: 6, background: 'var(--bg-elevated)' }}>
+                                <Filter size={14} color="var(--accent-orange)" />
+                                Decision
+                            </div>
+                        )}
+                        {view === 'action' && (
+                            <>
+                                <div className="dndnode action" onDragStart={(e) => onDragStart(e, 'action')} draggable style={{ padding: '8px 12px', fontSize: '0.75rem', gap: 6, background: 'var(--bg-elevated)' }}>
+                                    <Zap size={14} color="var(--accent-teal)" />
+                                    Action
+                                </div>
+                                <div className="dndnode action" onDragStart={(e) => onDragStart(e, 'sum')} draggable style={{ padding: '8px 12px', fontSize: '0.75rem', gap: 6, background: 'var(--bg-elevated)' }}>
+                                    <Sigma size={14} color="var(--accent-teal)" />
+                                    Sum
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </div>
             )}
         </aside>
     );
