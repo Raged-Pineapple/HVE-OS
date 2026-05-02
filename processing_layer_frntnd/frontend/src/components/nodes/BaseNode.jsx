@@ -11,7 +11,8 @@ const BaseNode = ({
   isExpanded, 
   setIsExpanded, 
   children,
-  color = "var(--cyan)"
+  color = "var(--cyan)",
+  hideDefaultSource = false
 }) => {
   return (
     <div className={`card custom-node ${type} ${selected ? 'selected' : ''}`} style={{ minWidth: 200 }}>
@@ -37,7 +38,7 @@ const BaseNode = ({
         {isExpanded && children}
       </div>
 
-      {!isExpanded && (
+      {!isExpanded && !hideDefaultSource && (
         <Handle 
           type="source" 
           position={Position.Right} 
