@@ -59,3 +59,8 @@ export const addDQRule  = (id, rule) => api.post(`/api/v1/sources/${id}/dq-rules
 // ── Silver / Query ────────────────────────────────────
 export const listSilverTables = () => api.get('/api/v1/silver/tables').then(r => r.data);
 export const runQuery = (sql) => api.post('/api/v1/query', { sql }).then(r => r.data);
+
+// ── Neo4j Graph ──────────────────────────────────────
+export const getEntitiesByLabel = (sourceId) => api.get(`/api/v1/graph/entities/label/${sourceId}`).then(r => r.data);
+export const listGraphSources = () => api.get('/api/v1/graph/sources').then(r => r.data);
+export const getEntityKeys = (sourceId) => api.get(`/api/v1/graph/entities/keys/${sourceId}`).then(r => r.data);

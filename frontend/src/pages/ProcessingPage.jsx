@@ -1,16 +1,140 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import ReactFlow, {
+  ReactFlowProvider,
+  addEdge,
+  useNodesState,
+  useEdgesState,
+  Controls,
+  Background,
+} from 'reactflow';
+import 'reactflow/dist/style.css';
+import '../App.css';
+
+import Sidebar from '../components/Sidebar';
+import SettingsPanel from '../components/SettingsPanel';
+import { 
+  LogicTriggerNode, 
+  AIAnalysisNode, 
+  DecisionNode, 
+  ActionNode,
+  AddNode,
+  SubtractNode,
+  SumNode
+} from '../components/nodes';
+import { listGraphSources, getEntitiesByLabel } from '../api/client.js';
+
+const nodeTypes = {
+  dataTrigger: LogicTriggerNode,
+  add: AddNode,
+  subtract: SubtractNode,
+  aiAnalysis: AIAnalysisNode,
+  decision: DecisionNode,
+  action: ActionNode,
+  sum: SumNode,
+};
+
+let id = 0;
+const getId = () => `node_${id++}`;
+
+const LogicGraphTab = () => {
+  const reactFlowWrapper = useRef(null);
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [reactFlowInstance, setReactFlowInstance] = useState(null);
+  const [selectedNode, setSelectedNode] = useState(null);
+
+  const onConnect = useCallback(
+    (params) => setEdges((eds) => addEdge(params, eds)),
+    [setEdges]
+  );
+
+  const onNodeDoubleClick = useCallback((event, node) => {
+    setSelectedNode(node);
+  }, []);
+
+  const updateNodeData = useCallback((nodeId, newData) => {
+    setNodes((nds) =>
+      nds.map((node) => {
+        if (node.id === nodeId) {
+          return { ...node, data: newData };
+        }
+        return node;
+      })
+    );
+  }, [setNodes]);
+
+  const onDragOver = useCallback((event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+  }, []);
+
+  const onDrop = useCallback(
+    (event) => {
+      event.preventDefault();
+
+      const type = event.dataTransfer.getData('application/reactflow');
+
+      if (typeof type === 'undefined' || !type) {
+        return;
+      }
+
+      const position = reactFlowInstance.screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
+      });
+      const sourceId = event.dataTransfer.getData('sourceId');
+      
+      const newNode = {
+        id: getId(),
+        type,
+        position,
+        data: { id: sourceId || `cfg_${Math.floor(Math.random() * 1000)}` },
+      };
+
+      setNodes((nds) => nds.concat(newNode));
+    },
+    [reactFlowInstance, setNodes]
+  );
+
+  return (
+    <div style={{ width: '100%', height: '100%', display: 'flex', position: 'relative' }}>
+      <ReactFlowProvider>
+        <Sidebar />
+        <div className="reactflow-wrapper" ref={reactFlowWrapper} style={{ flexGrow: 1, height: '100%' }}>
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onInit={setReactFlowInstance}
+            onDrop={onDrop}
+            onDragOver={onDragOver}
+            onNodeDoubleClick={onNodeDoubleClick}
+            nodeTypes={nodeTypes}
+            deleteKeyCode={['Backspace', 'Delete']}
+            fitView
+          >
+            <Controls />
+            <Background color="var(--text-muted)" gap={16} />
+          </ReactFlow>
+        </div>
+        {selectedNode && (
+          <SettingsPanel 
+            node={selectedNode} 
+            onClose={() => setSelectedNode(null)} 
+            onUpdate={updateNodeData} 
+          />
+        )}
+      </ReactFlowProvider>
+    </div>
+  );
+};
 
 export default function ProcessingPage() {
   return (
-    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100%', flexDirection:'column', gap:16 }}>
-      <div style={{ fontSize:'3rem' }}>⚙️</div>
-      <h1 style={{ color:'var(--text-primary)' }}>Processing</h1>
-      <p style={{ color:'var(--text-muted)', fontSize:'0.9rem', maxWidth:400, textAlign:'center' }}>
-        Advanced stream processing, Flink jobs, and transformation pipelines will be configured here.
-      </p>
-      <div style={{ background:'var(--cyan-dim)', border:'1px solid hsla(192,100%,55%,0.2)', borderRadius:10, padding:'14px 24px', fontSize:'0.82rem', color:'var(--cyan)', marginTop:8 }}>
-        🚧 Coming soon — use the <strong>Pipelines</strong> tab in Ingestion for Blueprints & DQ Rules
-      </div>
+    <div style={{ height: '100%', width: '100%' }}>
+      <LogicGraphTab />
     </div>
   );
 }
