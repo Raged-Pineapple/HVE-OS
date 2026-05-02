@@ -2,7 +2,15 @@ import React, { memo, useState } from 'react';
 import { Plus } from 'lucide-react';
 import BaseNode from '../BaseNode';
 
-export const AddNode = memo(({ data, selected }) => {
+export const config = {
+  type: 'add',
+  category: 'logic',
+  label: 'Add',
+  icon: Plus,
+  color: 'var(--accent-blue)'
+};
+
+export default memo(({ data, selected }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
   return (

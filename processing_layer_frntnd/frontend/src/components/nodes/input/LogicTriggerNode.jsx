@@ -4,7 +4,16 @@ import { Activity, Eye, EyeOff } from 'lucide-react';
 import { getEntityKeys } from '../../../api/client.js';
 import BaseNode from '../BaseNode';
 
-export const LogicTriggerNode = memo(({ data, selected }) => {
+export const config = {
+  type: 'dataTrigger',
+  category: 'input',
+  label: 'Logic Trigger',
+  icon: Activity,
+  color: 'var(--accent-blue)',
+  hideInSidebar: true
+};
+
+export default memo(({ data, selected }) => {
   const [keys, setKeys] = useState([]);
   const [isExpanded, setIsExpanded] = useState(false);
   const [showMeta, setShowMeta] = useState(false);

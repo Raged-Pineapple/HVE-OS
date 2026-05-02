@@ -2,7 +2,25 @@ import React, { memo, useState } from 'react';
 import { Zap } from 'lucide-react';
 import BaseNode from '../BaseNode';
 
-export const ActionNode = memo(({ data, selected }) => {
+export const config = {
+  type: 'action',
+  category: 'action',
+  label: 'Action',
+  icon: Zap,
+  color: 'var(--accent-teal)',
+  SettingsForm: ({ formData, handleChange }) => (
+    <div className="field">
+      <label>Webhook URL</label>
+      <input 
+        value={formData.webhook || ''}
+        onChange={(e) => handleChange('webhook', e.target.value)}
+        placeholder="https://api.hve-os.com/v1/alerts"
+      />
+    </div>
+  )
+};
+
+export default memo(({ data, selected }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
   return (

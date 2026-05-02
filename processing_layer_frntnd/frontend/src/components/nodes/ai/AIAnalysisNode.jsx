@@ -2,7 +2,40 @@ import React, { memo, useState } from 'react';
 import { Brain } from 'lucide-react';
 import BaseNode from '../BaseNode';
 
-export const AIAnalysisNode = memo(({ data, selected }) => {
+export const config = {
+  type: 'aiAnalysis',
+  category: 'ai',
+  label: 'AI Analysis',
+  icon: Brain,
+  color: 'var(--accent-purple)',
+  SettingsForm: ({ formData, handleChange }) => (
+    <>
+      <div className="field">
+        <label>AI Model</label>
+        <select 
+          value={formData.model || 'Kalman Filter'} 
+          onChange={(e) => handleChange('model', e.target.value)}
+        >
+          <option>Kalman Filter</option>
+          <option>Random Forest</option>
+          <option>LSTM Neural Net</option>
+          <option>Prophet Forecast</option>
+        </select>
+      </div>
+      <div className="field">
+        <label>Confidence Threshold ({formData.threshold || 0.8})</label>
+        <input 
+          type="range" 
+          min="0" max="1" step="0.05"
+          value={formData.threshold || 0.8}
+          onChange={(e) => handleChange('threshold', parseFloat(e.target.value))}
+        />
+      </div>
+    </>
+  )
+};
+
+export default memo(({ data, selected }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
   return (

@@ -12,24 +12,10 @@ import '../App.css';
 
 import Sidebar from '../components/Sidebar';
 import SettingsPanel from '../components/SettingsPanel';
-import { 
-  LogicTriggerNode, 
-  AIAnalysisNode, 
-  DecisionNode, 
-  ActionNode,
-  AddNode,
-  SumNode
-} from '../components/nodes';
+import { getNodeTypes } from '../components/nodes/registry.js';
 import { listGraphSources, getEntitiesByLabel } from '../api/client.js';
 
-const nodeTypes = {
-  dataTrigger: LogicTriggerNode,
-  add: AddNode,
-  aiAnalysis: AIAnalysisNode,
-  decision: DecisionNode,
-  action: ActionNode,
-  sum: SumNode,
-};
+const nodeTypes = getNodeTypes();
 
 let id = 0;
 const getId = () => `node_${id++}`;
@@ -120,6 +106,8 @@ const LogicGraphTab = () => {
         {selectedNode && (
           <SettingsPanel 
             node={selectedNode} 
+            nodes={nodes}
+            edges={edges}
             onClose={() => setSelectedNode(null)} 
             onUpdate={updateNodeData} 
           />

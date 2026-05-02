@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Database, Brain, Filter, Zap, ChevronLeft, ChevronRight, Activity, Sigma } from 'lucide-react';
 import { listGraphSources, getEntitiesByLabel } from '../api/client.js';
+import { getNodesByCategory } from './nodes/registry.js';
 
 const ImportsList = ({ onDragStart }) => {
     const [sources, setSources] = useState([]);
@@ -266,37 +267,33 @@ export default () => {
                 <ImportsList onDragStart={onDragStart} />
             ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                        {view === 'logic' && (
-                            <div className="dndnode input" onDragStart={(e) => onDragStart(e, 'add')} draggable style={{ padding: '8px 12px', fontSize: '0.75rem', gap: 6, background: 'var(--bg-elevated)' }}>
-                                <Activity size={14} color="var(--accent-blue)" />
-                                Add
-                            </div>
-                        )}
-                        {view === 'ai' && (
-                            <div className="dndnode ai" onDragStart={(e) => onDragStart(e, 'aiAnalysis')} draggable style={{ padding: '8px 12px', fontSize: '0.75rem', gap: 6, background: 'var(--bg-elevated)' }}>
-                                <Brain size={14} color="var(--accent-purple)" />
-                                AI Analysis
-                            </div>
-                        )}
-                        {view === 'decision' && (
-                            <div className="dndnode decision" onDragStart={(e) => onDragStart(e, 'decision')} draggable style={{ padding: '8px 12px', fontSize: '0.75rem', gap: 6, background: 'var(--bg-elevated)' }}>
-                                <Filter size={14} color="var(--accent-orange)" />
-                                Decision
-                            </div>
-                        )}
-                        {view === 'action' && (
-                            <>
-                                <div className="dndnode action" onDragStart={(e) => onDragStart(e, 'action')} draggable style={{ padding: '8px 12px', fontSize: '0.75rem', gap: 6, background: 'var(--bg-elevated)' }}>
-                                    <Zap size={14} color="var(--accent-teal)" />
-                                    Action
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {getNodesByCategory()[view]?.filter(node => !node.hideInSidebar).map(node => {
+                            const Icon = node.icon;
+                            return (
+                                <div 
+                                    key={node.type}
+                                    className="card" 
+                                    onDragStart={(e) => onDragStart(e, node.type)} 
+                                    draggable 
+                                    style={{ 
+                                        padding: '10px 12px', 
+                                        cursor: 'grab', 
+                                        background: 'var(--glass-bg)', 
+                                        borderColor: 'var(--border-default)',
+                                        transition: 'all 0.2s ease',
+                                        marginBottom: 6
+                                    }}
+                                >
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                                            {Icon && <Icon size={14} color={node.color || 'var(--text-muted)'} />}
+                                            <p style={{ fontWeight: 600, fontSize: '0.8rem', margin: 0 }}>{node.label}</p>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div className="dndnode action" onDragStart={(e) => onDragStart(e, 'sum')} draggable style={{ padding: '8px 12px', fontSize: '0.75rem', gap: 6, background: 'var(--bg-elevated)' }}>
-                                    <Sigma size={14} color="var(--accent-teal)" />
-                                    Sum
-                                </div>
-                            </>
-                        )}
+                            );
+                        })}
                     </div>
                 </div>
             )}
