@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Database, Brain, Filter, Zap, ChevronLeft, ChevronRight, Activity, Sigma } from 'lucide-react';
-import { listGraphSources, getEntitiesByLabel } from '../api/client.js';
+import { listGraphSources, getEntitiesByLabel, listSilverTables } from '../api/client.js';
 import { getNodesByCategory } from './nodes/registry.js';
 
 const ImportsList = ({ onDragStart }) => {
@@ -122,6 +122,18 @@ const ImportsList = ({ onDragStart }) => {
 export default () => {
     const [isOpen, setIsOpen] = useState(true);
     const [view, setView] = useState('nodes');
+    const [silverTables, setSilverTables] = useState([]);
+    const [loadingTables, setLoadingTables] = useState(false);
+
+    useEffect(() => {
+        if (view === 'database' && silverTables.length === 0) {
+            setLoadingTables(true);
+            listSilverTables()
+                .then(setSilverTables)
+                .catch(console.error)
+                .finally(() => setLoadingTables(false));
+        }
+    }, [view, silverTables.length]);
 
     const onDragStart = (event, nodeType, sourceId) => {
         event.dataTransfer.setData('application/reactflow', nodeType);
@@ -235,17 +247,17 @@ export default () => {
                 </button>
 
                 <button 
-                    onClick={() => setView('decision')} 
+                    onClick={() => setView('database')} 
                     style={{ 
                         flexShrink: 0, padding: '8px 14px', border: '1px solid var(--border-default)', borderRadius: 8, 
-                        background: view === 'decision' ? 'var(--cyan-dim)' : 'var(--bg-elevated)', 
-                        color: view === 'decision' ? 'var(--cyan)' : 'var(--text-secondary)', 
+                        background: view === 'database' ? 'var(--cyan-dim)' : 'var(--bg-elevated)', 
+                        color: view === 'database' ? 'var(--cyan)' : 'var(--text-secondary)', 
                         cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
-                        borderColor: view === 'decision' ? 'var(--cyan)' : 'var(--border-default)'
+                        borderColor: view === 'database' ? 'var(--cyan)' : 'var(--border-default)'
                     }}
                 >
-                    <Filter size={14} color={view === 'decision' ? 'var(--cyan)' : 'var(--accent-orange)'} />
-                    Decision
+                    <Database size={14} color={view === 'database' ? 'var(--cyan)' : 'var(--accent-orange)'} />
+                    Database
                 </button>
 
                 <button 
@@ -265,6 +277,36 @@ export default () => {
 
             {view === 'imports' ? (
                 <ImportsList onDragStart={onDragStart} />
+            ) : view === 'database' ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {loadingTables && <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Loading tables...</p>}
+                    {!loadingTables && silverTables.length === 0 && <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No tables found.</p>}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {silverTables.map((table, idx) => (
+                            <div 
+                                key={idx}
+                                className="card" 
+                                onDragStart={(e) => onDragStart(e, 'silverTable', table.table_name)} 
+                                draggable 
+                                style={{ 
+                                    padding: '10px 12px', 
+                                    cursor: 'grab', 
+                                    background: 'var(--glass-bg)', 
+                                    borderColor: 'var(--border-default)',
+                                    transition: 'all 0.2s ease',
+                                    marginBottom: 6
+                                }}
+                            >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                                        <Database size={14} color="var(--accent-orange)" />
+                                        <p style={{ fontWeight: 600, fontSize: '0.8rem', margin: 0, wordBreak: 'break-all' }}>{table.table_name}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
             ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

@@ -72,7 +72,10 @@ const LogicGraphTab = () => {
         id: getId(),
         type,
         position,
-        data: { id: sourceId || `cfg_${Math.floor(Math.random() * 1000)}` },
+        data: { 
+          id: sourceId || `cfg_${Math.floor(Math.random() * 1000)}`,
+          ...(type === 'silverTable' && sourceId ? { tableName: sourceId } : {})
+        },
       };
 
       setNodes((nds) => nds.concat(newNode));
