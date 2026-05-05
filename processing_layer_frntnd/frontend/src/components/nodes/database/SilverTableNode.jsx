@@ -1,8 +1,9 @@
 import React, { memo, useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Database, Play, AlertCircle, TableProperties, Maximize2, X, Download } from 'lucide-react';
 import { HotTable } from '@handsontable/react-wrapper';
 import { registerAllModules } from 'handsontable/registry';
-import 'handsontable/styles/handsontable.css';
+import 'handsontable/dist/handsontable.full.css';
 import { runQuery } from '../../../api/client.js';
 import BaseNode from '../BaseNode';
 
@@ -14,10 +15,12 @@ const TableEditorModal = ({ tableName, rows, columns, onClose }) => {
   const hotRef = useRef(null);
 
   // Convert rows (array of objects) → 2D array Handsontable expects
-  const data = rows.map(row => columns.map(col => {
+  const data = (rows || []).map(row => (columns || []).map(col => {
     const v = row[col];
     return typeof v === 'object' && v !== null ? JSON.stringify(v) : (v ?? '');
   }));
+
+  if (!rows || rows.length === 0) return null;
 
   const exportCSV = useCallback(() => {
     const hot = hotRef.current?.hotInstance;
@@ -38,11 +41,14 @@ const TableEditorModal = ({ tableName, rows, columns, onClose }) => {
     }
   }, [tableName]);
 
-  return (
+  return createPortal(
     <div
       style={{
-        position: 'fixed', inset: 0, zIndex: 9999,
-        display: 'flex', flexDirection: 'column',
+        position: 'fixed',
+        inset: 0,
+        zIndex: 99999,
+        display: 'flex',
+        flexDirection: 'column',
         background: '#1a1a1a',
       }}
       // Stop clicks from bubbling to the canvas
@@ -96,42 +102,42 @@ const TableEditorModal = ({ tableName, rows, columns, onClose }) => {
         </div>
       </div>
 
-      {/* Handsontable */}
-      <div style={{ flex: 1, overflow: 'hidden', background: '#fff' }}>
-        <HotTable
-          ref={hotRef}
-          data={data}
-          colHeaders={columns}
-          rowHeaders={true}
-          width="100%"
-          height="100%"
-          licenseKey="non-commercial-and-evaluation"
-          // Excel-like features
-          contextMenu={true}
-          manualColumnResize={true}
-          manualRowResize={true}
-          columnSorting={true}
-          filters={true}
-          dropdownMenu={true}
-          multiColumnSorting={true}
-          copyPaste={true}
-          outsideClickDeselects={false}
-          selectionMode="multiple"
-          fillHandle={true}
-          undo={true}
-          search={true}
-          fixedRowsTop={0}
-          autoWrapRow={true}
-          autoWrapCol={true}
-          stretchH="all"
-          mergeCells={true}
-          comments={true}
-          customBorders={true}
-          navigableHeaders={true}
-          renderAllRows={false}
-        />
+      {/* Handsontable Container */}
+      <div style={{ flex: 1, position: 'relative', background: '#fff' }}>
+        <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+          <HotTable
+            ref={hotRef}
+            data={data}
+            colHeaders={columns}
+            rowHeaders={true}
+            licenseKey="non-commercial-and-evaluation"
+            // Excel-like features
+            contextMenu={true}
+            manualColumnResize={true}
+            manualRowResize={true}
+            columnSorting={true}
+            filters={true}
+            dropdownMenu={true}
+            multiColumnSorting={true}
+            copyPaste={true}
+            outsideClickDeselects={false}
+            selectionMode="multiple"
+            fillHandle={true}
+            undo={true}
+            search={true}
+            fixedRowsTop={1}
+            autoWrapRow={true}
+            autoWrapCol={true}
+            stretchH="all"
+            mergeCells={true}
+            comments={true}
+            customBorders={true}
+            navigableHeaders={true}
+          />
+        </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
@@ -183,22 +189,7 @@ export const config = {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {/* SQL editor */}
           <div className="field">
-            <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>SQL Query</span>
-              <button
-                onClick={handleRunQuery}
-                disabled={loading}
-                style={{
-                  background: 'var(--accent-orange)', color: 'white',
-                  border: 'none', borderRadius: 4, padding: '4px 10px',
-                  fontSize: '0.6rem', cursor: loading ? 'not-allowed' : 'pointer',
-                  display: 'flex', alignItems: 'center', gap: 4,
-                }}
-              >
-                <Play size={10} />
-                {loading ? 'Running...' : 'Run'}
-              </button>
-            </label>
+            <label>SQL Query</label>
             <textarea
               style={{
                 minHeight: '80px', fontFamily: 'JetBrains Mono', fontSize: '0.7rem',
@@ -210,6 +201,30 @@ export const config = {
             />
             <span style={{ fontSize: '0.58rem', color: 'var(--text-muted)' }}>Ctrl+Enter to run</span>
           </div>
+
+          {/* Run Button */}
+          <button
+            onClick={handleRunQuery}
+            disabled={loading}
+            style={{
+              width: '100%',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              padding: '10px',
+              background: loading ? 'rgba(251,146,60,0.4)' : 'var(--accent-orange)',
+              color: 'white',
+              border: 'none',
+              borderRadius: 6,
+              fontSize: '0.75rem',
+              fontWeight: 700,
+              cursor: loading ? 'not-allowed' : 'pointer',
+              letterSpacing: '0.05em',
+              transition: 'opacity 0.2s',
+              opacity: loading ? 0.7 : 1,
+            }}
+          >
+            <Play size={14} />
+            {loading ? 'Running Query...' : 'Run Query'}
+          </button>
 
           {/* Error */}
           {error && (

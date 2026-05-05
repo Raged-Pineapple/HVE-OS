@@ -31,10 +31,11 @@ def get_connection():
     return _conn
 
 
-def _refresh_tables():
+def _refresh_tables(sql_context: str = None):
     """
     Scan Silver bucket for Parquet files, download them, 
     and register as DuckDB views.
+    Optional sql_context can be used to only refresh tables mentioned in the query.
     """
     global _registered_tables
     conn = get_connection()
@@ -58,6 +59,11 @@ def _refresh_tables():
 
     for table_info in silver_tables:
         table_name = table_info["table_name"]
+        
+        # Performance Optimization: Only refresh if the table is actually in the SQL query
+        # (Or if no query context is provided, refresh everything)
+        if sql_context and table_name.lower() not in sql_context.lower():
+            continue
         
         try:
             # ── TRY ICEBERG FIRST ──
@@ -111,8 +117,8 @@ def execute_query(sql: str, limit: int = 1000) -> dict:
     """
     start_time = time.time()
     
-    # Refresh tables to pick up new data
-    _refresh_tables()
+    # Refresh ONLY the tables needed for this query to pick up new data
+    _refresh_tables(sql_context=sql)
     
     conn = get_connection()
     

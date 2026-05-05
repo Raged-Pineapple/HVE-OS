@@ -1,6 +1,6 @@
 import React, { memo, useState, useEffect } from 'react';
 import { useEdges, useNodes, Handle, Position } from 'reactflow';
-import { Fingerprint, Database, Tags, FileJson, Layers } from 'lucide-react';
+import { Fingerprint, Database, Tags, FileJson, Layers, Pin, PinOff, Search } from 'lucide-react';
 import { getEntityKeys, getEntitiesByLabel } from '../../../api/client.js';
 import BaseNode from '../BaseNode';
 
@@ -15,9 +15,35 @@ export const config = {
     const [sampleData, setSampleData] = useState({});
     const [loading, setLoading] = useState(false);
     const [viewMode, setViewMode] = useState({});
+    const [searchQuery, setSearchQuery] = useState('');
 
     const incomingEdges = edges.filter(e => e.target === nodeId);
     const incomingNodes = incomingEdges.map(e => nodes.find(n => n.id === e.source)).filter(Boolean);
+
+    // Compute available keys for Display Name Property including nested objects (1 level deep)
+    const availableKeys = new Set();
+    incomingNodes.forEach(n => {
+      const dataList = sampleData[n.data.id] || [];
+      dataList.forEach(item => {
+        Object.keys(item).forEach(k => {
+          availableKeys.add(k);
+          let val = item[k];
+          
+          if (typeof val === 'string' && val.trim().startsWith('{')) {
+            try {
+              val = JSON.parse(val.replace(/'/g, '"'));
+            } catch (e) {
+              // ignore
+            }
+          }
+
+          if (val && typeof val === 'object' && !Array.isArray(val)) {
+            Object.keys(val).forEach(nk => availableKeys.add(`${k}.${nk}`));
+          }
+        });
+      });
+    });
+    const keyOptions = Array.from(availableKeys).sort();
 
     useEffect(() => {
       const sources = incomingNodes.filter(n => n.type === 'dataTrigger' && n.data?.id);
@@ -61,6 +87,19 @@ export const config = {
             value={formData.label || ''}
             onChange={(e) => handleChange('label', e.target.value)}
           />
+        </div>
+
+        <div className="field">
+          <label>Display Name Property</label>
+          <select 
+            value={formData.displayNameProperty || ''} 
+            onChange={(e) => handleChange('displayNameProperty', e.target.value)}
+          >
+            <option value="">-- Default (name, id, title) --</option>
+            {keyOptions.map(k => (
+              <option key={k} value={k}>{k}</option>
+            ))}
+          </select>
         </div>
 
         <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 16 }}>
@@ -192,6 +231,101 @@ export const config = {
             )}
           </div>
         </div>
+
+        {/* Extracted Entities Preview */}
+        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0, letterSpacing: '0.05em' }}>Extracted Entities Preview</p>
+          </div>
+
+          <div style={{ position: 'relative', marginBottom: 12 }}>
+            <Search size={14} color="var(--text-muted)" style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)' }} />
+            <input 
+              type="text" 
+              placeholder="Search entities..." 
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              style={{ paddingLeft: 28, width: '100%' }}
+            />
+          </div>
+          
+          {incomingNodes.length > 0 ? incomingNodes.map(n => {
+            const dataList = sampleData[n.data.id] || [];
+            if (dataList.length === 0) return null;
+
+            return (
+              <div key={`preview-${n.id}`} style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: '250px', overflowY: 'auto', paddingRight: 4 }}>
+                {dataList.map((item, idx) => {
+                  let customName = null;
+                  if (formData.displayNameProperty) {
+                    const parts = formData.displayNameProperty.split('.');
+                    let current = item;
+                    for (let i = 0; i < parts.length; i++) {
+                      if (current === null || current === undefined) break;
+                      if (typeof current === 'string' && current.trim().startsWith('{')) {
+                        try { current = JSON.parse(current.replace(/'/g, '"')); } catch (e) {}
+                      }
+                      current = current[parts[i]];
+                    }
+                    if (current !== null && current !== undefined && typeof current !== 'object') {
+                      customName = String(current);
+                    }
+                  }
+                  const entityName = customName || item.name || item.id || item.title || `Entity ${idx + 1}`;
+                  return { original: item, entityName, idx };
+                })
+                .filter(item => {
+                  if (!searchQuery) return true;
+                  return item.entityName.toLowerCase().includes(searchQuery.toLowerCase());
+                })
+                .map(({ original: item, entityName, idx }) => {
+                  const isPinned = (formData.pinnedEntities || []).includes(entityName);
+
+                  return (
+                    <div key={idx} style={{ 
+                      display: 'flex', 
+                      justifyContent: 'space-between', 
+                      alignItems: 'center',
+                      padding: '6px 8px', 
+                      background: 'rgba(0,0,0,0.15)', 
+                      borderRadius: 6, 
+                      border: '1px solid',
+                      borderColor: isPinned ? 'var(--cyan)' : 'var(--border-subtle)'
+                    }}>
+                      <span style={{ fontSize: '0.65rem', color: isPinned ? 'var(--cyan)' : 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {entityName}
+                      </span>
+                      <button 
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          const currentPinned = formData.pinnedEntities || [];
+                          const nextPinned = isPinned 
+                            ? currentPinned.filter(name => name !== entityName)
+                            : [...currentPinned, entityName];
+                          handleChange('pinnedEntities', nextPinned);
+                        }}
+                        style={{ 
+                          background: 'none', 
+                          border: 'none', 
+                          cursor: 'pointer', 
+                          color: isPinned ? 'var(--cyan)' : 'var(--text-muted)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          padding: 4
+                        }}
+                      >
+                        {isPinned ? <Pin size={12} fill="currentColor" /> : <PinOff size={12} />}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          }) : (
+            <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>Connect an input to preview entities.</p>
+          )}
+        </div>
       </div>
     );
   }
@@ -213,8 +347,7 @@ export default memo(({ id, data, selected }) => {
       // Just take the first connected source for simplicity
       const sourceId = sources[0].data.id;
       getEntitiesByLabel(sourceId).then(dataList => {
-        // Limit to 5 for UI performance on the canvas
-        setEntities(dataList.slice(0, 5));
+        setEntities(dataList);
       }).catch(() => setEntities([]));
     } else {
       setEntities([]);
@@ -231,7 +364,7 @@ export default memo(({ id, data, selected }) => {
       isExpanded={isExpanded}
       setIsExpanded={setIsExpanded}
       color={config.color}
-      hideDefaultSource={entities.length > 0} // Hide default if we have dynamic ones
+      hideDefaultSource={false} // Always show bulk output handle
     >
       <div style={{ marginTop: 12, borderTop: '1px solid var(--border-subtle)', paddingTop: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
@@ -241,48 +374,106 @@ export default memo(({ id, data, selected }) => {
           </p>
         </div>
         
-        {entities.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
-            <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: '0 0 4px 0' }}>Extracted Output</p>
-            {entities.map((entity, idx) => (
-              <div key={idx} style={{ 
-                position: 'relative', 
-                background: 'var(--bg-elevated)', 
-                padding: '4px 8px', 
-                borderRadius: 4, 
-                fontSize: '0.65rem',
-                border: '1px solid var(--border-subtle)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6
-              }}>
-                <Layers size={10} color="var(--cyan)" />
-                <span style={{ color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>
-                  {entity.name || entity.id || entity.title || `Entity ${idx + 1}`}
-                </span>
-                
-                {/* Dynamic Output Handle for this specific entity */}
-                <Handle 
-                  type="source" 
-                  id={`entity-out-${idx}`}
-                  position={Position.Right} 
-                  style={{ 
-                    right: -6, 
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    background: 'var(--cyan)', 
-                    width: 10, 
-                    height: 10, 
-                    border: '2px solid var(--bg-surface)' 
-                  }} 
-                />
-              </div>
-            ))}
-            {entities.length >= 5 && (
-               <p style={{ fontSize: '0.6rem', color: 'var(--text-muted)', margin: 0, textAlign: 'center', fontStyle: 'italic' }}>+ more (limited to 5)</p>
-            )}
-          </div>
-        )}
+        {entities.length > 0 && (() => {
+          const pinnedNames = data.pinnedEntities || [];
+          
+          // Pre-calculate entity names
+          const resolvedEntities = entities.map((entity, idx) => {
+            let customName = null;
+            if (data.displayNameProperty) {
+              const parts = data.displayNameProperty.split('.');
+              let current = entity;
+              for (let i = 0; i < parts.length; i++) {
+                if (current === null || current === undefined) break;
+                if (typeof current === 'string' && current.trim().startsWith('{')) {
+                  try { current = JSON.parse(current.replace(/'/g, '"')); } catch (e) {}
+                }
+                current = current[parts[i]];
+              }
+              if (current !== null && current !== undefined && typeof current !== 'object') {
+                customName = String(current);
+              }
+            }
+            const name = customName || entity.name || entity.id || entity.title || `Entity ${idx + 1}`;
+            return { original: entity, name, idx };
+          });
+
+          const pinned = resolvedEntities.filter(e => pinnedNames.includes(e.name));
+          const unpinned = resolvedEntities.filter(e => !pinnedNames.includes(e.name));
+          const preview = unpinned.slice(0, 3);
+          const hiddenCount = unpinned.length - preview.length;
+
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+              <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: '0 0 4px 0' }}>
+                Extracted: {entities.length} Entities
+              </p>
+              
+              {/* Render Pinned Entities */}
+              {pinned.map((item) => (
+                <div key={`pinned-${item.name}`} style={{ 
+                  position: 'relative', 
+                  background: 'var(--bg-elevated)', 
+                  padding: '4px 8px', 
+                  borderRadius: 4, 
+                  fontSize: '0.65rem',
+                  border: '1px solid var(--cyan)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6
+                }}>
+                  <Pin size={10} color="var(--cyan)" fill="var(--cyan)" />
+                  <span style={{ color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>
+                    {item.name}
+                  </span>
+                  
+                  {/* Dynamic Output Handle for Pinned entity */}
+                  <Handle 
+                    type="source" 
+                    id={`entity-out-pinned-${item.name}`}
+                    position={Position.Right} 
+                    style={{ 
+                      right: -6, 
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'var(--cyan)', 
+                      width: 10, 
+                      height: 10, 
+                      border: '2px solid var(--bg-surface)' 
+                    }} 
+                  />
+                </div>
+              ))}
+
+              {/* Render Preview (Unpinned) */}
+              {preview.map((item) => (
+                <div key={`preview-${item.name}`} style={{ 
+                  background: 'var(--bg-surface)', 
+                  padding: '4px 8px', 
+                  borderRadius: 4, 
+                  fontSize: '0.65rem',
+                  border: '1px solid var(--border-subtle)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  opacity: 0.7
+                }}>
+                  <Layers size={10} color="var(--text-muted)" />
+                  <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>
+                    {item.name}
+                  </span>
+                  {/* NO handle for unpinned preview items */}
+                </div>
+              ))}
+
+              {hiddenCount > 0 && (
+                 <p style={{ fontSize: '0.6rem', color: 'var(--text-muted)', margin: 0, textAlign: 'center', fontStyle: 'italic' }}>
+                   + {hiddenCount} more unpinned
+                 </p>
+              )}
+            </div>
+          );
+        })()}
 
         {entities.length === 0 && (
           <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', margin: 0 }}>

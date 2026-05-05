@@ -38,7 +38,7 @@ const BaseNode = ({
         {isExpanded && children}
       </div>
 
-      {!isExpanded && !hideDefaultSource && (
+      {!hideDefaultSource && (
         <Handle 
           type="source" 
           position={Position.Right} 
@@ -53,7 +53,7 @@ const BaseNode = ({
       )}
       
       {/* Default target handle for non-input nodes */}
-      {type !== 'input' && !isExpanded && (
+      {type !== 'input' && (
         <Handle 
           type="target" 
           position={Position.Left} 

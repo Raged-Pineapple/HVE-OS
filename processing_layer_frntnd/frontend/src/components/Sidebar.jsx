@@ -119,7 +119,7 @@ const ImportsList = ({ onDragStart }) => {
 };
 
 
-export default () => {
+export default function Sidebar() {
     const [isOpen, setIsOpen] = useState(true);
     const [view, setView] = useState('nodes');
     const [silverTables, setSilverTables] = useState([]);
