@@ -134,11 +134,29 @@ async def get_entity_keys(source_id: str):
     Retrieves all unique property keys used by entities of a specific source label.
     """
     neo4j = get_neo4j_service()
-    label = source_id.capitalize()
-    query = f"MATCH (n:{label}) UNWIND keys(n) AS key RETURN DISTINCT key"
+    query = f"MATCH (n) WHERE n._source_id = $source_id UNWIND keys(n) AS key RETURN DISTINCT key"
     try:
-        results = neo4j.execute_query(query)
+        results = neo4j.execute_query(query, {"source_id": source_id})
         return [r["key"] for r in results]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Neo4j Error: {str(e)}")
+
+@router.get("/entities/preview/{source_id}")
+async def get_entity_preview(source_id: str, prop: str):
+    """
+    **Preview Entity Property from Neo4j**
+    Dynamically fetches nodes by source ID and extracts the requested property value.
+    """
+    neo4j = get_neo4j_service()
+    query = f"""
+    MATCH (n) 
+    WHERE n._source_id = $source_id AND n.`{prop}` IS NOT NULL
+    RETURN properties(n) as original, n.`{prop}` as value 
+    LIMIT 100
+    """
+    try:
+        results = neo4j.execute_query(query, {"source_id": source_id})
+        return [{"original": r["original"], "value": r["value"]} for r in results]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Neo4j Error: {str(e)}")
 

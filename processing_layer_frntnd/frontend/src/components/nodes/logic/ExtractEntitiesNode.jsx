@@ -1,8 +1,133 @@
 import React, { memo, useState, useEffect } from 'react';
 import { useEdges, useNodes, Handle, Position } from 'reactflow';
 import { Fingerprint, Database, Tags, FileJson, Layers, Pin, PinOff, Search } from 'lucide-react';
-import { getEntityKeys, getEntitiesByLabel } from '../../../api/client.js';
+import { getEntityKeys, getEntitiesByLabel, getEntityPreview } from '../../../api/client.js';
 import BaseNode from '../BaseNode';
+import { parsePythonLiteral } from '../../../utils/pipelineUtils.js';
+
+const SourcePreview = ({ node, formData, dataList, searchQuery, handleChange }) => {
+  const [cypherResults, setCypherResults] = useState([]);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+
+  useEffect(() => {
+    if (formData.displayNameProperty) {
+      setLoadingPreview(true);
+      getEntityPreview(node.data.id, formData.displayNameProperty)
+        .then(res => setCypherResults(res))
+        .catch(() => setCypherResults([]))
+        .finally(() => setLoadingPreview(false));
+    } else {
+      setCypherResults([]);
+    }
+  }, [formData.displayNameProperty, node.data.id]);
+
+  if (loadingPreview) return <p style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>Running Cypher query...</p>;
+
+  const finalData = formData.displayNameProperty && cypherResults.length > 0 
+    ? cypherResults.map(r => ({ original: r.original, entityName: String(r.value) }))
+    : dataList.map((item, idx) => {
+        let customName = null;
+        if (formData.displayNameProperty) {
+          const parts = formData.displayNameProperty.split('.');
+          let current = item;
+          for (let i = 0; i < parts.length; i++) {
+            if (current === null || current === undefined) break;
+            if (typeof current === 'string' && current.trim().startsWith('{')) {
+              try { 
+                const parsed = parsePythonLiteral(current);
+                if (parsed) current = parsed;
+              } catch (e) {}
+            }
+            current = current[parts[i]];
+          }
+          if (current !== null && current !== undefined && typeof current !== 'object') {
+            customName = String(current);
+          }
+        }
+        const name = customName || item.name || item.id || item.title || `Entity ${idx + 1}`;
+        return { original: item, entityName: name };
+      });
+
+  return finalData
+    .filter(item => {
+      if (!searchQuery) return true;
+      return item.entityName.toLowerCase().includes(searchQuery.toLowerCase());
+    })
+    .map(({ original: item, entityName }, idx) => {
+      const isPinned = (formData.pinnedEntities || []).includes(entityName);
+      return (
+        <div key={idx} style={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center',
+          padding: '6px 8px', 
+          background: 'rgba(0,0,0,0.15)', 
+          borderRadius: 6, 
+          border: '1px solid',
+          borderColor: isPinned ? 'var(--cyan)' : 'var(--border-subtle)'
+        }}>
+          <span style={{ fontSize: '0.65rem', color: isPinned ? 'var(--cyan)' : 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {entityName}
+          </span>
+          <button 
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              const currentPinned = formData.pinnedEntities || [];
+              const nextPinned = isPinned 
+                ? currentPinned.filter(name => name !== entityName)
+                : [...currentPinned, entityName];
+              handleChange('pinnedEntities', nextPinned);
+            }}
+            style={{ 
+              background: 'none', 
+              border: 'none', 
+              cursor: 'pointer', 
+              color: isPinned ? 'var(--cyan)' : 'var(--text-muted)',
+              display: 'flex',
+              alignItems: 'center',
+              padding: 4
+            }}
+          >
+            {isPinned ? <Pin size={12} fill="currentColor" /> : <PinOff size={12} />}
+          </button>
+        </div>
+      );
+    });
+};
+
+const applyExtraction = (dataList, strategy, label) => {
+  if (strategy === 'KeyPath' && label) {
+    return dataList.flatMap(item => {
+      const parts = label.split('.');
+      let current = item;
+      for (let p of parts) {
+        if (current === null || current === undefined) break;
+        
+        // Handle case where parent might be a stringified JSON
+        if (typeof current === 'string' && current.trim().startsWith('{')) {
+          try {
+            const parsed = parsePythonLiteral(current);
+            if (parsed) current = parsed;
+          } catch (e) {}
+        }
+        
+        current = current[p];
+      }
+
+      // Final result could also be stringified JSON
+      if (typeof current === 'string' && (current.trim().startsWith('[') || current.trim().startsWith('{'))) {
+        try {
+          const parsed = parsePythonLiteral(current);
+          if (parsed) current = parsed;
+        } catch (e) {}
+      }
+
+      return Array.isArray(current) ? current : (current ? [current] : []);
+    });
+  }
+  return dataList || [];
+};
 
 export const config = {
   type: 'extractEntities',
@@ -17,30 +142,39 @@ export const config = {
     const [viewMode, setViewMode] = useState({});
     const [searchQuery, setSearchQuery] = useState('');
 
+    const [neo4jKeys, setNeo4jKeys] = useState([]);
+
     const incomingEdges = edges.filter(e => e.target === nodeId);
     const incomingNodes = incomingEdges.map(e => nodes.find(n => n.id === e.source)).filter(Boolean);
 
-    // Compute available keys for Display Name Property including nested objects (1 level deep)
-    const availableKeys = new Set();
+    // Compute available keys for Display Name Property
+    const availableKeys = new Set(neo4jKeys);
     incomingNodes.forEach(n => {
-      const dataList = sampleData[n.data.id] || [];
+      const rawList = sampleData[n.data.id] || [];
+      const dataList = applyExtraction(rawList, formData.strategy, formData.label).slice(0, 100); // cap for performance
       dataList.forEach(item => {
-        Object.keys(item).forEach(k => {
-          availableKeys.add(k);
-          let val = item[k];
-          
-          if (typeof val === 'string' && val.trim().startsWith('{')) {
-            try {
-              val = JSON.parse(val.replace(/'/g, '"'));
-            } catch (e) {
-              // ignore
+        if (!item || typeof item !== 'object') return;
+        
+        const extractKeys = (obj, prefix = '') => {
+          Object.keys(obj).forEach(k => {
+            const fullKey = prefix ? `${prefix}.${k}` : k;
+            availableKeys.add(fullKey);
+            
+            let val = obj[k];
+            if (typeof val === 'string' && (val.trim().startsWith('{') || val.trim().startsWith('['))) {
+              try {
+                const parsed = parsePythonLiteral(val);
+                if (parsed) val = parsed;
+              } catch (e) {}
             }
-          }
-
-          if (val && typeof val === 'object' && !Array.isArray(val)) {
-            Object.keys(val).forEach(nk => availableKeys.add(`${k}.${nk}`));
-          }
-        });
+            
+            if (val && typeof val === 'object' && !Array.isArray(val) && prefix.split('.').length < 3) {
+              extractKeys(val, fullKey);
+            }
+          });
+        };
+        
+        extractKeys(item);
       });
     });
     const keyOptions = Array.from(availableKeys).sort();
@@ -49,6 +183,8 @@ export const config = {
       const sources = incomingNodes.filter(n => n.type === 'dataTrigger' && n.data?.id);
       if (sources.length > 0) {
         setLoading(true);
+        // Also fetch Neo4j keys to enrich the dropdown
+        getEntityKeys(sources[0].data.id).then(keys => setNeo4jKeys(keys)).catch(() => setNeo4jKeys([]));
         Promise.all(sources.map(async (s) => {
           const keys = await getEntityKeys(s.data.id);
           const dataList = await getEntitiesByLabel(s.data.id).catch(() => []);
@@ -198,7 +334,7 @@ export const config = {
                         </pre>
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: '160px', overflowY: 'auto', paddingRight: 4 }}>
-                          {sampleData[n.data.id].map((item, idx) => (
+                          {applyExtraction(sampleData[n.data.id] || [], formData.strategy, formData.label).slice(0, 100).map((item, idx) => (
                             <div key={idx} style={{ padding: '6px 8px', background: 'rgba(0,0,0,0.15)', borderRadius: 6, border: '1px solid var(--border-subtle)' }}>
                               <div style={{ fontSize: '0.6rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6, paddingBottom: 4, borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                                 Entity {idx + 1}
@@ -236,6 +372,11 @@ export const config = {
         <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0, letterSpacing: '0.05em' }}>Extracted Entities Preview</p>
+            {formData.displayNameProperty && (
+              <span style={{ fontSize: '0.55rem', padding: '2px 6px', background: 'rgba(52, 211, 153, 0.1)', color: 'var(--emerald)', borderRadius: 12, border: '1px solid var(--emerald)' }}>
+                Cypher Preview Live
+              </span>
+            )}
           </div>
 
           <div style={{ position: 'relative', marginBottom: 12 }}>
@@ -250,76 +391,19 @@ export const config = {
           </div>
           
           {incomingNodes.length > 0 ? incomingNodes.map(n => {
-            const dataList = sampleData[n.data.id] || [];
+            const rawList = sampleData[n.data.id] || [];
+            const dataList = applyExtraction(rawList, formData.strategy, formData.label).slice(0, 100);
             if (dataList.length === 0) return null;
 
             return (
               <div key={`preview-${n.id}`} style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: '250px', overflowY: 'auto', paddingRight: 4 }}>
-                {dataList.map((item, idx) => {
-                  let customName = null;
-                  if (formData.displayNameProperty) {
-                    const parts = formData.displayNameProperty.split('.');
-                    let current = item;
-                    for (let i = 0; i < parts.length; i++) {
-                      if (current === null || current === undefined) break;
-                      if (typeof current === 'string' && current.trim().startsWith('{')) {
-                        try { current = JSON.parse(current.replace(/'/g, '"')); } catch (e) {}
-                      }
-                      current = current[parts[i]];
-                    }
-                    if (current !== null && current !== undefined && typeof current !== 'object') {
-                      customName = String(current);
-                    }
-                  }
-                  const entityName = customName || item.name || item.id || item.title || `Entity ${idx + 1}`;
-                  return { original: item, entityName, idx };
-                })
-                .filter(item => {
-                  if (!searchQuery) return true;
-                  return item.entityName.toLowerCase().includes(searchQuery.toLowerCase());
-                })
-                .map(({ original: item, entityName, idx }) => {
-                  const isPinned = (formData.pinnedEntities || []).includes(entityName);
-
-                  return (
-                    <div key={idx} style={{ 
-                      display: 'flex', 
-                      justifyContent: 'space-between', 
-                      alignItems: 'center',
-                      padding: '6px 8px', 
-                      background: 'rgba(0,0,0,0.15)', 
-                      borderRadius: 6, 
-                      border: '1px solid',
-                      borderColor: isPinned ? 'var(--cyan)' : 'var(--border-subtle)'
-                    }}>
-                      <span style={{ fontSize: '0.65rem', color: isPinned ? 'var(--cyan)' : 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {entityName}
-                      </span>
-                      <button 
-                        type="button"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          const currentPinned = formData.pinnedEntities || [];
-                          const nextPinned = isPinned 
-                            ? currentPinned.filter(name => name !== entityName)
-                            : [...currentPinned, entityName];
-                          handleChange('pinnedEntities', nextPinned);
-                        }}
-                        style={{ 
-                          background: 'none', 
-                          border: 'none', 
-                          cursor: 'pointer', 
-                          color: isPinned ? 'var(--cyan)' : 'var(--text-muted)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          padding: 4
-                        }}
-                      >
-                        {isPinned ? <Pin size={12} fill="currentColor" /> : <PinOff size={12} />}
-                      </button>
-                    </div>
-                  );
-                })}
+                <SourcePreview 
+                  node={n} 
+                  formData={formData} 
+                  dataList={dataList} 
+                  searchQuery={searchQuery} 
+                  handleChange={handleChange} 
+                />
               </div>
             );
           }) : (
@@ -344,15 +428,23 @@ export default memo(({ id, data, selected }) => {
     const sources = incomingNodes.filter(n => n.type === 'dataTrigger' && n.data?.id);
     
     if (sources.length > 0) {
-      // Just take the first connected source for simplicity
       const sourceId = sources[0].data.id;
-      getEntitiesByLabel(sourceId).then(dataList => {
-        setEntities(dataList);
-      }).catch(() => setEntities([]));
+      
+      if (data.displayNameProperty) {
+        // Fetch specific property values for names
+        getEntityPreview(sourceId, data.displayNameProperty).then(results => {
+          setEntities(results.map(r => ({ ...r.original, __resolvedName: String(r.value) })));
+        }).catch(() => setEntities([]));
+      } else {
+        // Fallback to general label fetch
+        getEntitiesByLabel(sourceId).then(dataList => {
+          setEntities(applyExtraction(dataList, data.strategy, data.label));
+        }).catch(() => setEntities([]));
+      }
     } else {
       setEntities([]);
     }
-  }, [edges.length, id, nodes]);
+  }, [edges.length, id, nodes, data.strategy, data.label, data.displayNameProperty]);
 
   return (
     <BaseNode
@@ -374,19 +466,62 @@ export default memo(({ id, data, selected }) => {
           </p>
         </div>
         
+        {/* Pinned entities — always visible from saved data, with output handles */}
+        {(data.pinnedEntities || []).length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+            <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: '0 0 4px 0' }}>
+              Pinned — {(data.pinnedEntities || []).length} entities
+            </p>
+            {(data.pinnedEntities || []).map((name, idx) => (
+              <div key={`pinned-${idx}-${name}`} style={{ 
+                position: 'relative', 
+                background: 'var(--bg-elevated)', 
+                padding: '4px 8px', 
+                borderRadius: 4, 
+                fontSize: '0.65rem',
+                border: '1px solid var(--cyan)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6
+              }}>
+                <Pin size={10} color="var(--cyan)" fill="var(--cyan)" />
+                <span style={{ color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>
+                  {name}
+                </span>
+                <Handle 
+                  type="source" 
+                  id={`entity-out-pinned-${name}`}
+                  position={Position.Right} 
+                  style={{ 
+                    right: -6, 
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'var(--cyan)', 
+                    width: 10, 
+                    height: 10, 
+                    border: '2px solid var(--bg-surface)' 
+                  }} 
+                />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Unpinned preview from fetched entities */}
         {entities.length > 0 && (() => {
           const pinnedNames = data.pinnedEntities || [];
-          
-          // Pre-calculate entity names
           const resolvedEntities = entities.map((entity, idx) => {
-            let customName = null;
-            if (data.displayNameProperty) {
+            let customName = entity.__resolvedName || null;
+            if (!customName && data.displayNameProperty) {
               const parts = data.displayNameProperty.split('.');
               let current = entity;
               for (let i = 0; i < parts.length; i++) {
                 if (current === null || current === undefined) break;
                 if (typeof current === 'string' && current.trim().startsWith('{')) {
-                  try { current = JSON.parse(current.replace(/'/g, '"')); } catch (e) {}
+                  try { 
+                    const parsed = parsePythonLiteral(current);
+                    if (parsed) current = parsed;
+                  } catch (e) {}
                 }
                 current = current[parts[i]];
               }
@@ -395,59 +530,15 @@ export default memo(({ id, data, selected }) => {
               }
             }
             const name = customName || entity.name || entity.id || entity.title || `Entity ${idx + 1}`;
-            return { original: entity, name, idx };
+            return { name, idx };
           });
-
-          const pinned = resolvedEntities.filter(e => pinnedNames.includes(e.name));
           const unpinned = resolvedEntities.filter(e => !pinnedNames.includes(e.name));
           const preview = unpinned.slice(0, 3);
           const hiddenCount = unpinned.length - preview.length;
-
           return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
-              <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: '0 0 4px 0' }}>
-                Extracted: {entities.length} Entities
-              </p>
-              
-              {/* Render Pinned Entities */}
-              {pinned.map((item) => (
-                <div key={`pinned-${item.name}`} style={{ 
-                  position: 'relative', 
-                  background: 'var(--bg-elevated)', 
-                  padding: '4px 8px', 
-                  borderRadius: 4, 
-                  fontSize: '0.65rem',
-                  border: '1px solid var(--cyan)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6
-                }}>
-                  <Pin size={10} color="var(--cyan)" fill="var(--cyan)" />
-                  <span style={{ color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>
-                    {item.name}
-                  </span>
-                  
-                  {/* Dynamic Output Handle for Pinned entity */}
-                  <Handle 
-                    type="source" 
-                    id={`entity-out-pinned-${item.name}`}
-                    position={Position.Right} 
-                    style={{ 
-                      right: -6, 
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      background: 'var(--cyan)', 
-                      width: 10, 
-                      height: 10, 
-                      border: '2px solid var(--bg-surface)' 
-                    }} 
-                  />
-                </div>
-              ))}
-
-              {/* Render Preview (Unpinned) */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: (data.pinnedEntities || []).length > 0 ? 8 : 0 }}>
               {preview.map((item) => (
-                <div key={`preview-${item.name}`} style={{ 
+                <div key={`preview-${item.idx}-${item.name}`} style={{ 
                   background: 'var(--bg-surface)', 
                   padding: '4px 8px', 
                   borderRadius: 4, 
@@ -462,20 +553,18 @@ export default memo(({ id, data, selected }) => {
                   <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>
                     {item.name}
                   </span>
-                  {/* NO handle for unpinned preview items */}
                 </div>
               ))}
-
               {hiddenCount > 0 && (
-                 <p style={{ fontSize: '0.6rem', color: 'var(--text-muted)', margin: 0, textAlign: 'center', fontStyle: 'italic' }}>
-                   + {hiddenCount} more unpinned
-                 </p>
+                <p style={{ fontSize: '0.6rem', color: 'var(--text-muted)', margin: 0, textAlign: 'center', fontStyle: 'italic' }}>
+                  + {hiddenCount} more unpinned
+                </p>
               )}
             </div>
           );
         })()}
 
-        {entities.length === 0 && (
+        {(data.pinnedEntities || []).length === 0 && entities.length === 0 && (
           <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', margin: 0 }}>
             Extracting: <span style={{ color: 'var(--cyan)' }}>{(data.selectedFields || []).length} fields</span>
           </p>

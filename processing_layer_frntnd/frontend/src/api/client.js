@@ -62,6 +62,7 @@ export const runQuery = (sql) => api.post('/api/v1/query', { sql }).then(r => r.
 export const getEntitiesByLabel = (sourceId) => api.get(`/api/v1/graph/entities/label/${sourceId}`).then(r => r.data);
 export const listGraphSources = () => api.get('/api/v1/graph/sources').then(r => r.data);
 export const getEntityKeys = (sourceId) => api.get(`/api/v1/graph/entities/keys/${sourceId}`).then(r => r.data);
+export const getEntityPreview = (sourceId, prop) => api.get(`/api/v1/graph/entities/preview/${sourceId}`, { params: { prop } }).then(r => r.data);
 
 
 
