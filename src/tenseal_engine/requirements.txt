@@ -1,0 +1,5 @@
+tenseal==0.3.15
+numpy>=1.20.0
+fastapi==0.103.2
+uvicorn==0.23.2
+pydantic==2.4.2
