@@ -1,6 +1,6 @@
 import React, { memo, useState, useEffect, useRef } from 'react';
 import { useEdges, useNodes, Handle, Position, useReactFlow } from 'reactflow';
-import { Plus, AlertTriangle } from 'lucide-react';
+import { PlusCircle } from 'lucide-react';
 import BaseNode from '../BaseNode';
 import { attrKeyFromHandle, resolveAttrValue } from '../../../utils/pipelineUtils.js';
 
@@ -8,22 +8,8 @@ export const config = {
   type: 'add',
   category: 'logic',
   label: 'Add',
-  icon: Plus,
+  icon: PlusCircle,
   color: 'var(--accent-blue)',
-  SettingsForm: ({ formData, handleChange }) => (
-    <div className="field">
-      <label>Constant to Add</label>
-      <input
-        type="number"
-        value={formData.constant ?? 0}
-        onChange={e => handleChange('constant', Number(e.target.value))}
-        placeholder="Enter integer"
-      />
-      <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: 4 }}>
-        This value is added to every connected attribute individually.
-      </p>
-    </div>
-  ),
 };
 
 const detectType = (val) => {
@@ -32,69 +18,83 @@ const detectType = (val) => {
   return 'string';
 };
 
-
 export default memo(({ id, data, selected }) => {
   const [isExpanded, setIsExpanded] = useState(false);
-  const [rows, setRows] = useState([]); // { handle, attrKey, inputValue, result, error }
+  const [inputRows, setInputRows] = useState([]);
 
   const edges = useEdges();
   const nodes = useNodes();
   const { setNodes } = useReactFlow();
-  // Keep a ref to nodes so the effect can read current node data
-  // without including `nodes` in the dep array (which causes infinite loops via setNodes)
+
   const nodesRef = useRef(nodes);
   useEffect(() => { nodesRef.current = nodes; });
-  const prevResultsRef = useRef(null);
+  const prevSumRef = useRef(null);
 
+  const activeInputs = data.activeInputs || [];
   const constant = data.constant ?? 0;
+  const constantType = data.constantType || 'int';
 
+  // Resolve incoming edges → attribute rows
   useEffect(() => {
     const incomingEdges = edges.filter(e => e.target === id);
-
-    const computed = incomingEdges.map(edge => {
+    const rows = incomingEdges.map(edge => {
       const sourceNode = nodesRef.current.find(n => n.id === edge.source);
       const handle = edge.sourceHandle || 'default';
       const attrKey = attrKeyFromHandle(handle);
-
       const entity = sourceNode?.data?.resolvedEntity ?? null;
-      const inputValue = resolveAttrValue(entity, attrKey);
-      const type = detectType(inputValue);
+      const value = resolveAttrValue(entity, attrKey);
+      return { handle, attrKey, value, rowKey: edge.id };
+    });
+    setInputRows(rows);
+  }, [edges, id]);
 
-      let result = null;
-      let error = null;
-
-      if (type === 'null') {
-        error = 'NULL INPUT';
-      } else if (type !== 'number') {
-        error = 'TYPE ERROR: NOT NUMERIC';
-      } else {
-        result = Number(inputValue) + Number(constant);
+  // Compute sum: active rows + constant
+  const computeSum = () => {
+    let sum = 0;
+    for (const row of inputRows) {
+      if (activeInputs.includes(row.rowKey)) {
+        const n = Number(row.value);
+        if (!isNaN(n)) sum += n;
       }
+    }
+    const c = constantType === 'float' ? parseFloat(constant) : parseInt(constant, 10);
+    if (!isNaN(c)) sum += c;
+    return sum;
+  };
+  const sum = computeSum();
 
-      return { handle, attrKey, inputValue, result, error };
-    });
-
-    setRows(computed);
-
-    // Push results into node data so downstream nodes can read them.
-    // Only call setNodes if the output actually changed — prevents infinite loop.
-    const resolvedResults = {};
-    computed.forEach(r => {
-      if (r.result !== null) resolvedResults[r.attrKey] = r.result;
-    });
-    const serialised = JSON.stringify(resolvedResults);
-    if (prevResultsRef.current !== serialised) {
-      prevResultsRef.current = serialised;
+  // Push sum into node store for downstream propagation (guarded)
+  useEffect(() => {
+    const s = String(sum);
+    if (prevSumRef.current !== s) {
+      prevSumRef.current = s;
       setNodes(nds => nds.map(n =>
-        n.id === id ? { ...n, data: { ...n.data, resolvedEntity: resolvedResults } } : n
+        n.id === id ? { ...n, data: { ...n.data, resolvedEntity: { sum } } } : n
       ));
     }
-  }, [edges, id, constant, setNodes]);
+  }, [sum, id, setNodes]);
+
+  const setData = (patch) => {
+    setNodes(nds => nds.map(n =>
+      n.id === id ? { ...n, data: { ...n.data, ...patch } } : n
+    ));
+  };
+
+  const handleClick = (rowKey) => {
+    if (activeInputs.includes(rowKey)) return;
+    setData({ activeInputs: [...activeInputs, rowKey] });
+  };
+
+  const handleDoubleClick = (e, rowKey) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setData({ activeInputs: activeInputs.filter(k => k !== rowKey) });
+  };
 
   return (
     <BaseNode
       label="Add"
-      icon={Plus}
+      icon={PlusCircle}
       type="add"
       data={data}
       selected={selected}
@@ -103,135 +103,189 @@ export default memo(({ id, data, selected }) => {
       color="var(--accent-blue)"
       hideDefaultSource={true}
     >
-      <div style={{ marginTop: 12, borderTop: '1px solid var(--border-subtle)', paddingTop: 8, position: 'relative' }}>
+      <div style={{
+        display: 'flex',
+        marginTop: 12,
+        borderTop: '1px solid var(--border-subtle)',
+        paddingTop: 10,
+        minWidth: 320,
+      }}>
 
-        {/* Constant input badge — shown inline on the node */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          marginBottom: 10, padding: '4px 8px',
-          background: 'rgba(59, 130, 246, 0.08)',
-          border: '1px solid rgba(59, 130, 246, 0.3)',
-          borderRadius: 6,
-        }}>
-          <Plus size={12} color="var(--accent-blue)" />
-          <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', flex: 1 }}>Constant</span>
-          <input
-            type="number"
-            value={constant}
-            onMouseDown={e => e.stopPropagation()}
-            onChange={e => {
-              const val = Number(e.target.value);
-              setNodes(nds => nds.map(n =>
-                n.id === id ? { ...n, data: { ...n.data, constant: val } } : n
-              ));
-            }}
-            style={{
-              width: 52,
-              padding: '2px 6px',
-              fontSize: '0.65rem',
-              fontFamily: 'JetBrains Mono',
-              background: 'var(--bg-surface)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 4,
-              color: 'var(--accent-blue)',
-              fontWeight: 700,
-              textAlign: 'center',
-            }}
-          />
-        </div>
+        {/* ── LEFT COLUMN: inputs + constant ── */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, paddingRight: 12 }}>
 
-        {rows.length === 0 ? (
-          <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-            Connect attr-out handles to add the constant.
-          </p>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {rows.map((row, idx) => (
-              <div key={`${row.handle}-${idx}`} style={{ position: 'relative' }}>
-                {/* Left input handle */}
+          {inputRows.length === 0 && (
+            <p style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontStyle: 'italic', margin: '0 0 4px 4px' }}>
+              Connect attr-out handles
+            </p>
+          )}
+
+          {inputRows.map((row) => {
+            const isActive = activeInputs.includes(row.rowKey);
+            const numVal = Number(row.value);
+            const isNumeric = row.value !== null && row.value !== undefined && !isNaN(numVal);
+            const type = detectType(row.value);
+
+            return (
+              // ⚠ NO position:relative here — Handle must anchor to node root, not this div
+              <div
+                key={row.rowKey}
+                onClick={() => handleClick(row.rowKey)}
+                onDoubleClick={(e) => handleDoubleClick(e, row.rowKey)}
+                title={isActive ? 'Double-click to remove from sum' : 'Click to include in sum'}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '4px 8px 4px 6px',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  background: isActive ? 'rgba(59,130,246,0.08)' : 'transparent',
+                  border: `1px solid ${isActive ? 'rgba(59,130,246,0.3)' : 'transparent'}`,
+                  transition: 'background 0.15s, border 0.15s',
+                }}
+              >
+                {/* Per-row target handle — no positioned ancestor → anchors to node left edge */}
                 <Handle
                   type="target"
                   id={row.handle}
                   position={Position.Left}
                   style={{
-                    left: -6,
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    background: 'var(--accent-blue)',
+                    background: isActive ? 'var(--accent-blue)' : 'var(--bg-surface)',
                     width: 10, height: 10,
-                    border: '2px solid var(--bg-surface)',
-                    position: 'absolute',
+                    border: `2px solid ${isActive ? 'var(--accent-blue)' : 'var(--text-muted)'}`,
+                    transition: 'all 0.15s',
                   }}
                 />
 
+                {/* Active state dot */}
                 <div style={{
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  padding: '5px 8px 5px 10px',
-                  background: row.error ? 'rgba(239,68,68,0.07)' : 'rgba(0,0,0,0.15)',
-                  borderRadius: 6,
-                  border: `1px solid ${row.error ? 'rgba(239,68,68,0.35)' : 'var(--border-subtle)'}`,
-                  fontSize: '0.6rem',
-                  minWidth: 220,
+                  width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                  background: isActive ? 'var(--accent-blue)' : 'var(--border-subtle)',
+                  transition: 'background 0.15s',
+                }} />
+
+                {/* Attr name */}
+                <span style={{
+                  fontSize: '0.65rem',
+                  color: isActive ? 'var(--text-primary)' : 'var(--text-muted)',
+                  fontWeight: isActive ? 600 : 400,
+                  flex: 1,
                 }}>
-                  {/* Attribute key */}
-                  <span style={{ color: 'var(--cyan)', fontWeight: 600, minWidth: 56, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {row.attrKey}
-                  </span>
+                  {row.attrKey}
+                </span>
 
-                  {/* Input value */}
-                  <span style={{ color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', minWidth: 36, textAlign: 'right' }}>
-                    {row.inputValue !== null ? String(row.inputValue) : <span style={{ opacity: 0.4, fontStyle: 'italic' }}>null</span>}
-                  </span>
-
-                  {row.error ? (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 3, marginLeft: 'auto', color: '#ef4444', fontSize: '0.55rem', fontWeight: 600 }}>
-                      <AlertTriangle size={9} />
-                      {row.error}
-                    </span>
-                  ) : (
-                    <>
-                      {/* Arrow + constant */}
-                      <span style={{ color: 'var(--text-muted)', opacity: 0.5, margin: '0 2px' }}>→</span>
-                      <span style={{ color: 'var(--accent-blue)', fontFamily: 'JetBrains Mono', fontWeight: 600 }}>
-                        +{constant}
-                      </span>
-                      <span style={{ color: 'var(--text-muted)', opacity: 0.5, margin: '0 2px' }}>→</span>
-
-                      {/* Result value */}
-                      <span style={{
-                        color: 'var(--emerald)',
-                        fontFamily: 'JetBrains Mono',
-                        fontWeight: 700,
-                        marginLeft: 'auto',
-                        marginRight: 14,
-                      }}>
-                        {row.result}
-                      </span>
-                    </>
-                  )}
-                </div>
-
-                {/* Right output handle per attribute — only if valid result */}
-                {!row.error && (
-                  <Handle
-                    type="source"
-                    id={`add-out-${row.attrKey}`}
-                    position={Position.Right}
-                    style={{
-                      right: -6,
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      background: 'var(--emerald)',
-                      width: 10, height: 10,
-                      border: '2px solid var(--bg-surface)',
-                      position: 'absolute',
-                    }}
-                  />
-                )}
+                {/* Value + type badge */}
+                <span style={{ fontSize: '0.55rem', color: isNumeric ? 'var(--cyan)' : '#ef4444', fontFamily: 'JetBrains Mono' }}>
+                  {row.value !== null && row.value !== undefined
+                    ? (isNumeric ? numVal : '⚠ NaN')
+                    : <span style={{ opacity: 0.4, fontStyle: 'italic' }}>null</span>}
+                </span>
+                <span style={{
+                  fontSize: '0.45rem', padding: '1px 4px', borderRadius: 3,
+                  background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)',
+                  fontFamily: 'JetBrains Mono',
+                }}>
+                  {type}
+                </span>
               </div>
-            ))}
+            );
+          })}
+
+          {/* ── Constant row ── */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            marginTop: 6, paddingTop: 6, paddingLeft: 4,
+            borderTop: '1px dashed var(--border-subtle)',
+          }}>
+            <PlusCircle size={13} color="var(--accent-blue)" style={{ flexShrink: 0 }} />
+            <input
+              type="number"
+              value={constant}
+              onMouseDown={e => e.stopPropagation()}
+              onChange={e => setData({ constant: e.target.value })}
+              style={{
+                width: 56, padding: '2px 6px',
+                fontSize: '0.65rem', fontFamily: 'JetBrains Mono',
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border-subtle)', borderRadius: 4,
+                color: 'var(--accent-blue)', fontWeight: 700, textAlign: 'center',
+              }}
+            />
+            <select
+              value={constantType}
+              onMouseDown={e => e.stopPropagation()}
+              onChange={e => setData({ constantType: e.target.value })}
+              style={{
+                fontSize: '0.55rem', padding: '2px 4px',
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border-subtle)', borderRadius: 4,
+                color: 'var(--text-muted)',
+              }}
+            >
+              <option value="int">int</option>
+              <option value="float">float</option>
+            </select>
           </div>
-        )}
+        </div>
+
+        {/* ── DIVIDER ── */}
+        <div style={{ width: 1, background: 'var(--border-subtle)', margin: '0 2px', alignSelf: 'stretch' }} />
+
+        {/* ── RIGHT COLUMN: fin_val + SUM output ── */}
+        <div style={{
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          gap: 4, paddingLeft: 10, paddingRight: 22,
+          minWidth: 90,
+        }}>
+          <span style={{
+            fontSize: '0.48rem', color: 'var(--text-muted)',
+            textTransform: 'uppercase', letterSpacing: '0.1em',
+          }}>
+            fin_val
+          </span>
+
+          {/* Live SUM value box */}
+          <div style={{
+            padding: '5px 12px',
+            background: 'rgba(52,211,153,0.1)',
+            border: '1.5px solid rgba(52,211,153,0.4)',
+            borderRadius: 8,
+            textAlign: 'center',
+            minWidth: 60,
+          }}>
+            <span style={{
+              fontSize: '1rem', fontWeight: 800,
+              fontFamily: 'JetBrains Mono',
+              color: 'var(--emerald)',
+            }}>
+              {Number.isInteger(sum) ? sum : parseFloat(sum.toFixed(4))}
+            </span>
+          </div>
+
+          <span style={{
+            fontSize: '0.48rem', color: 'var(--emerald)',
+            fontWeight: 700, letterSpacing: '0.12em',
+          }}>
+            SUM
+          </span>
+
+          {/* Prominent output source handle — no positioned ancestor → right edge of node */}
+          <Handle
+            type="source"
+            id="sum-out"
+            position={Position.Right}
+            style={{
+              background: 'var(--emerald)',
+              width: 14, height: 14,
+              border: '3px solid var(--bg-surface)',
+              boxShadow: '0 0 0 2px var(--emerald)',
+            }}
+          />
+        </div>
+
       </div>
     </BaseNode>
   );

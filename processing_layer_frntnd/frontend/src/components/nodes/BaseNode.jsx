@@ -12,7 +12,8 @@ const BaseNode = ({
   setIsExpanded, 
   children,
   color = "var(--cyan)",
-  hideDefaultSource = false
+  hideDefaultSource = false,
+  hideDefaultTarget = false
 }) => {
   return (
     <div className={`card custom-node ${type} ${selected ? 'selected' : ''}`} style={{ minWidth: 200 }}>
@@ -53,7 +54,7 @@ const BaseNode = ({
       )}
       
       {/* Default target handle for non-input nodes */}
-      {type !== 'input' && (
+      {type !== 'input' && !hideDefaultTarget && (
         <Handle 
           type="target" 
           position={Position.Left} 

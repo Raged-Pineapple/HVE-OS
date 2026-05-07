@@ -15,7 +15,7 @@ _src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _src_dir not in sys.path:
     sys.path.insert(0, _src_dir)
 
-from routers import ingest, control_plane, query, debug, graph, log_stream
+from routers import ingest, control_plane, query, debug, graph, log_stream, security
 from routers.log_stream import attach_handler
 
 # Setup logging
@@ -172,6 +172,7 @@ app.include_router(control_plane.router)
 app.include_router(query.router)
 app.include_router(debug.router)
 app.include_router(log_stream.router)
+app.include_router(security.router)
 
 # Create a dedicated sub-application for the Graph Control Plane
 graph_app = FastAPI(

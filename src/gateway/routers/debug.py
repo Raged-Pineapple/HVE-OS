@@ -400,7 +400,7 @@ async def factory_reset(keep_config: bool = True):
         try:
             from confluent_kafka.admin import AdminClient
             import os
-            admin = AdminClient({'bootstrap.servers': os.getenv("KAFKA_BROKERS", "localhost:9092")})
+            admin = AdminClient({'bootstrap.servers': os.getenv("KAFKA_BROKERS", "127.0.0.1:9094")})
             admin.delete_topics(["raw-telemetry", "silver-telemetry"])
             logger.info("Kafka topics deleted (they will auto-recreate).")
         except Exception as e:

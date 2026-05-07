@@ -17,14 +17,14 @@ for _d in [_gateway_dir, _src_dir]:
     if _d not in sys.path:
         sys.path.insert(0, _d)
 
-from services import neo4j_service, kafka_service, db_service, query_service
-from services.kafka_service import SILVER_TOPIC
+from gateway.services import neo4j_service, kafka_service, db_service, query_service
+from gateway.services.kafka_service import SILVER_TOPIC
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
 # Configuration
-KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:9092")
+KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:9094")
 CONSUMER_GROUP = "hve-graph-processor-v1"
 
 class GraphProcessor:

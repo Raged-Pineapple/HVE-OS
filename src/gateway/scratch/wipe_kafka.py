@@ -2,7 +2,7 @@ from confluent_kafka.admin import AdminClient
 import os
 
 def wipe_kafka():
-    admin = AdminClient({'bootstrap.servers': os.getenv("KAFKA_BROKERS", "localhost:9092")})
+    admin = AdminClient({'bootstrap.servers': os.getenv("KAFKA_BROKERS", "localhost:9094")})
     topics = ["raw-telemetry", "silver-telemetry"]
     print(f"Attempting to delete topics: {topics}...")
     fs = admin.delete_topics(topics, operation_timeout=30)

@@ -63,6 +63,7 @@ export const getEntitiesByLabel = (sourceId) => api.get(`/api/v1/graph/entities/
 export const listGraphSources = () => api.get('/api/v1/graph/sources').then(r => r.data);
 export const getEntityKeys = (sourceId) => api.get(`/api/v1/graph/entities/keys/${sourceId}`).then(r => r.data);
 export const getEntityPreview = (sourceId, prop) => api.get(`/api/v1/graph/entities/preview/${sourceId}`, { params: { prop } }).then(r => r.data);
+export const discoverSecurityProviders = () => api.get('/api/v1/security/discovery').then(r => r.data);
 
 
 

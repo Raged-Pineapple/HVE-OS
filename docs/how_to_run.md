@@ -397,5 +397,5 @@ python scripts\test_e2e.py
 | `MINIO_URL` | `localhost:9000` | MinIO endpoint |
 | `MINIO_ROOT_USER` | `hve_admin` | MinIO access key |
 | `MINIO_ROOT_PASSWORD` | `hve_password123` | MinIO secret key |
-| `KAFKA_BROKERS` | `localhost:9092` | Kafka bootstrap servers |
+| `KAFKA_BROKERS` | `localhost:9094` | Kafka bootstrap servers when running locally. Use `kafka:9092` from another compose service. |
 | `HVE_API_URL` | `http://127.0.0.1:8000/api/v1/ingest` | CLI tool target |

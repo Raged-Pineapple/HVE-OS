@@ -28,14 +28,14 @@ for _d in [_gateway_dir, _src_dir]:
         sys.path.insert(0, _d)
 
 from confluent_kafka import Consumer, KafkaError
-from services import db_service, minio_service, iceberg_service, kafka_service, mapping_service
-from services.minio_service import BRONZE_BUCKET, SILVER_BUCKET
-from services.kafka_service import SILVER_TOPIC
+from gateway.services import db_service, minio_service, iceberg_service, kafka_service, mapping_service
+from gateway.services.minio_service import BRONZE_BUCKET, SILVER_BUCKET
+from gateway.services.kafka_service import SILVER_TOPIC
 
 logger = logging.getLogger(__name__)
 
 # Configuration
-KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:9092")
+KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:9094")
 RAW_TOPIC = "raw-telemetry"
 CONSUMER_GROUP = "hve-stream-processor-v2"
 BATCH_SIZE = 100          # Messages per batch

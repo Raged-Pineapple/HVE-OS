@@ -16,7 +16,7 @@ docker-compose up -d
 ```
 
 - **MinIO Console**: [http://localhost:9001](http://localhost:9001) (User: `hve_admin`, Password: `hve_password123`)
-- **Kafka**: Accessible at `localhost:29092`
+- **Kafka**: Accessible from your host at `localhost:9094`. Other compose services should use `kafka:9092`.
 
 ### 2. Start Gateway API
 Navigate to the `src/gateway` directory and run the FastAPI server:

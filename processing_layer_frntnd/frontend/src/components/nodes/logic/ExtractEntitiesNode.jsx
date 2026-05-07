@@ -1,5 +1,5 @@
-import React, { memo, useState, useEffect } from 'react';
-import { useEdges, useNodes, Handle, Position } from 'reactflow';
+import React, { memo, useState, useEffect, useRef } from 'react';
+import { useEdges, useNodes, Handle, Position, useReactFlow } from 'reactflow';
 import { Fingerprint, Database, Tags, FileJson, Layers, Pin, PinOff, Search } from 'lucide-react';
 import { getEntityKeys, getEntitiesByLabel, getEntityPreview } from '../../../api/client.js';
 import BaseNode from '../BaseNode';
@@ -418,9 +418,11 @@ export const config = {
 export default memo(({ id, data, selected }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [entities, setEntities] = useState([]);
+  const prevResolvedRef = useRef(null);
   
   const edges = useEdges();
   const nodes = useNodes();
+  const { setNodes } = useReactFlow();
 
   useEffect(() => {
     const incomingEdges = edges.filter(e => e.target === id);
@@ -445,6 +447,51 @@ export default memo(({ id, data, selected }) => {
       setEntities([]);
     }
   }, [edges.length, id, nodes, data.strategy, data.label, data.displayNameProperty]);
+
+  // Propagate pinned entities to node.data.resolvedEntity so downstream nodes can read the objects
+  useEffect(() => {
+    if (!data.pinnedEntities || data.pinnedEntities.length === 0) {
+      if (prevResolvedRef.current !== 'null') {
+        prevResolvedRef.current = 'null';
+        setNodes(nds => nds.map(n => n.id === id && n.data?.resolvedEntity ? { ...n, data: { ...n.data, resolvedEntity: null } } : n));
+      }
+      return;
+    }
+    const resolvedMap = {};
+    
+    // Use the exact same name resolution logic as the preview to ensure we find the pinned entity
+    entities.forEach((entity, idx) => {
+      let customName = entity.__resolvedName || null;
+      if (!customName && data.displayNameProperty) {
+        const parts = data.displayNameProperty.split('.');
+        let current = entity;
+        for (let i = 0; i < parts.length; i++) {
+          if (current === null || current === undefined) break;
+          if (typeof current === 'string' && current.trim().startsWith('{')) {
+            try { 
+              const parsed = parsePythonLiteral(current);
+              if (parsed) current = parsed;
+            } catch (e) {}
+          }
+          current = current[parts[i]];
+        }
+        if (current !== null && current !== undefined && typeof current !== 'object') {
+          customName = String(current);
+        }
+      }
+      const name = customName || entity.name || entity.id || entity.title || `Entity ${idx + 1}`;
+      
+      if (data.pinnedEntities.includes(name)) {
+        resolvedMap[name] = entity;
+      }
+    });
+    
+    const str = JSON.stringify(resolvedMap);
+    if (prevResolvedRef.current !== str) {
+      prevResolvedRef.current = str;
+      setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, resolvedEntity: resolvedMap } } : n));
+    }
+  }, [entities, data.pinnedEntities, data.displayNameProperty, id, setNodes]);
 
   return (
     <BaseNode

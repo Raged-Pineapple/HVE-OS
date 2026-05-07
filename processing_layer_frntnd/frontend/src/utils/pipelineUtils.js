@@ -55,6 +55,7 @@ export const attrKeyFromHandle = (handleId) => {
   if (handleId.startsWith('attr-out-')) return handleId.slice('attr-out-'.length);
   if (handleId.startsWith('add-out-')) return handleId.slice('add-out-'.length);
   if (handleId.startsWith('entity-out-pinned-')) return handleId.slice('entity-out-pinned-'.length);
+  if (handleId.startsWith('combine-out-'))       return handleId.slice('combine-out-'.length);
   return handleId;
 };
 

@@ -1,7 +1,7 @@
 import React, { memo, useState, useEffect } from 'react';
 import { Lock } from 'lucide-react';
 import BaseNode from '../BaseNode';
-import { discoverSecurityProviders } from '../../../../../../frontend/src/api/client';
+import { discoverSecurityProviders } from '../../../api/client';
 
 export const config = {
   type: 'encryptNode',
