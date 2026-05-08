@@ -31,7 +31,7 @@ def get_pool():
     if _pool is None or _pool.closed:
         _pool = ThreadedConnectionPool(
             minconn=2,
-            maxconn=10,
+            maxconn=20,
             **DB_CONFIG
         )
         logger.info("PostgreSQL connection pool created.")
@@ -122,6 +122,22 @@ def get_all_sources() -> list:
     """Get all registered sources."""
     with get_cursor() as cur:
         cur.execute("SELECT * FROM source_registry ORDER BY created_at DESC")
+        return [dict(row) for row in cur.fetchall()]
+
+def get_sources_with_status() -> list:
+    """Get all sources joined with their API polling status in one query."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT 
+                s.*, 
+                a.is_polling, 
+                a.last_status, 
+                a.last_error, 
+                a.last_polled_at
+            FROM source_registry s
+            LEFT JOIN api_source_configs a ON s.source_id = a.source_id
+            ORDER BY s.created_at DESC
+        """)
         return [dict(row) for row in cur.fetchall()]
 
 def get_source(source_id: str) -> dict:

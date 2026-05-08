@@ -63,23 +63,26 @@ async def list_sources():
 
 @router.get("/with-status")
 async def list_sources_with_status():
-    """List all sources with their API polling health status."""
+    """List all sources with their API polling health status (Optimized)."""
     try:
-        sources = db_service.get_all_sources()
+        raw_sources = db_service.get_sources_with_status()
         result = []
-        for s in sources:
+        for s in raw_sources:
+            # Flatten the joined columns into the poll_status structure expected by frontend
+            s['poll_status'] = None
+            if s.get('is_polling') is not None:
+                s['poll_status'] = {
+                    'is_polling': s.pop('is_polling'),
+                    'last_status': s.pop('last_status'),
+                    'last_error': s.pop('last_error'),
+                    'last_polled_at': str(s.pop('last_polled_at')) if s.get('last_polled_at') else None,
+                }
+            
+            # Format dates
             for key in ['created_at', 'updated_at']:
                 if s.get(key):
                     s[key] = str(s[key])
-            cfg = db_service.get_api_config(s['source_id'])
-            s['poll_status'] = None
-            if cfg:
-                s['poll_status'] = {
-                    'is_polling': cfg.get('is_polling', False),
-                    'last_status': cfg.get('last_status'),
-                    'last_error': cfg.get('last_error'),
-                    'last_polled_at': str(cfg['last_polled_at']) if cfg.get('last_polled_at') else None,
-                }
+            
             result.append(s)
         return result
     except Exception as e:

@@ -49,6 +49,8 @@ export const pushStream = (payload) =>
 // ── Blueprints ───────────────────────────────────────
 export const getBlueprints  = (id) => api.get(`/api/v1/sources/${id}/blueprints`).then(r => r.data);
 export const setBlueprints  = (id, bp) => api.post(`/api/v1/sources/${id}/blueprints`, bp).then(r => r.data);
+export const getMappingScript = (id) => api.get(`/api/v1/sources/${id}/mapping-script`).then(r => r.data);
+export const saveMappingScript = (id, script) => api.put(`/api/v1/sources/${id}/mapping-script`, { mapping_script: script }).then(r => r.data);
 
 // ── DQ Rules ─────────────────────────────────────────
 export const getDQRules = (id) => api.get(`/api/v1/sources/${id}/dq-rules`).then(r => r.data);

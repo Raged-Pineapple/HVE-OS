@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { previewApi, registerSource, registerApiSource, getBlueprints, setBlueprints, getDQRules, addDQRule, tracePipeline } from '../api/client.js';
+import { previewApi, registerSource, registerApiSource, getBlueprints, setBlueprints, getDQRules, addDQRule, tracePipeline, getMappingScript, saveMappingScript } from '../api/client.js';
 import { useToast } from './ToastProvider.jsx';
 import JMESPathCanvas from './JMESPathCanvas.jsx';
 
@@ -60,6 +60,9 @@ export default function ApiWizard() {
   const [preview, setPreview] = useState(null);
   const [previewErr, setPreviewErr] = useState(null);
   const [previewTime, setPreviewTime] = useState(null);
+  const [scriptLogs, setScriptLogs] = useState('');
+  const [scriptError, setScriptError] = useState('');
+  const [silverPreview, setSilverPreview] = useState(null);
 
   // Status tracking per step + activity log
   const [stepStatus, setStepStatus] = useState({});
@@ -68,7 +71,6 @@ export default function ApiWizard() {
   const markStep = (s, status) => setStepStatus(prev => ({...prev, [s]: status}));
   const log = (action, status, detail) => setActLog(prev => [{ts: new Date().toLocaleTimeString(), action, status, detail}, ...prev].slice(0, 50));
   const [reqTab, setReqTab] = useState('headers');
-  const [silverPreview, setSilverPreview] = useState(null);
 
   const [bps, setBPs] = useState([blankBP()]);
   const [bpSaving, setBpSaving] = useState(false);
@@ -101,34 +103,67 @@ export default function ApiWizard() {
     finally { setLoading(false); }
   };
 
-  const saveBPs = async () => {
-    setBpSaving(true); log('Save Blueprints','pending',`${bps.length} fields for ${form.source_id}`);
+  const refreshPreview = async () => {
     try {
-      try { await registerSource({ source_id:form.source_id, source_type:'STREAM', protocol:'HTTP', description:form.description||'Pre-registered' }); log('Pre-register Source','ok',form.source_id); } catch { /* already exists */ }
-      // eslint-disable-next-line no-unused-vars
-      await setBlueprints(form.source_id, bps.map(({blueprint_id,source_id,created_at,...r})=>r));
-      setBpSaved(true); markStep(2,'ok'); log('Save Blueprints','ok',`${bps.length} fields saved`); toast('Blueprints saved!','success');
+      log('Silver Preview', 'pending', 'Fetching fresh data for preview...');
+      let hdrs = {}; try { hdrs = form.headers ? JSON.parse(form.headers) : {}; } catch { /* ignore */ }
+      let body = null; try { body = form.body_template ? JSON.parse(form.body_template) : null; } catch { /* ignore */ }
+      const p = await previewApi({ source_id: form.source_id||'preview', api_url:form.api_url, method:form.method, headers:hdrs, body_template:body, poll_interval_seconds:60 });
+      if (p && p.preview && p.preview.length > 0) {
+        const trace = await tracePipeline(form.source_id, p.preview[0]);
+        const transStage = trace?.stages?.stage_4_transform;
+        
+        // Populate script console state
+        setScriptLogs(transStage?.detail?.logs || '');
+        setScriptError(transStage?.error || '');
+
+        if (transStage?.status === 'PASSED' && transStage?.detail?.mapped_rows) {
+          setSilverPreview(transStage.detail.mapped_rows);
+          log('Silver Preview', 'ok', `Silver preview generated (${transStage.detail.mapped_rows.length} rows exploded)`);
+        } else {
+          const errorMsg = transStage?.error || 'Transformation failed or returned no data';
+          log('Silver Preview', 'error', errorMsg);
+          setSilverPreview(null);
+        }
+      } else { log('Silver Preview', 'error', 'No preview data fetched'); }
+    } catch (e) { log('Silver Preview', 'error', e?.response?.data?.detail || e.message); }
+  };
+
+  const saveBPs = async () => {
+    setBpSaving(true); 
+    log('Save Blueprints', 'pending', `Activating JMESPath mode for ${form.source_id}...`);
+    try {
+      // 1. Deactivate Python script so Blueprints take over
+      await saveMappingScript(form.source_id, null);
+      setScript('');
+      setScriptActive(false);
+
+      // 2. Ensure source is registered
+      try { 
+        await registerSource({ 
+          source_id: form.source_id, 
+          source_type: 'STREAM', 
+          protocol: 'HTTP', 
+          description: form.description || 'Pre-registered' 
+        }); 
+      } catch { /* already exists */ }
+
+      // 3. Save the actual blueprints
+      await setBlueprints(form.source_id, bps.map(({blueprint_id, source_id, created_at, ...r}) => r));
       
-      try {
-        log('Silver Preview', 'pending', 'Fetching fresh data for preview...');
-        let hdrs = {}; try { hdrs = form.headers ? JSON.parse(form.headers) : {}; } catch { /* ignore */ }
-        let body = null; try { body = form.body_template ? JSON.parse(form.body_template) : null; } catch { /* ignore */ }
-        const p = await previewApi({ source_id: form.source_id||'preview', api_url:form.api_url, method:form.method, headers:hdrs, body_template:body, poll_interval_seconds:60 });
-        if (p && p.preview && p.preview.length > 0) {
-          const trace = await tracePipeline(form.source_id, p.preview[0]);
-          if (trace?.stages?.stage_4_transform?.detail?.mapped_rows) {
-            setSilverPreview(trace.stages.stage_4_transform.detail.mapped_rows);
-            log('Silver Preview', 'ok', `Silver preview generated (${trace.stages.stage_4_transform.detail.mapped_rows.length} rows exploded)`);
-          } else {
-            // Find which stage failed and show its error
-            const failedStage = Object.values(trace?.stages || {}).find(s => s.status === 'FAILED');
-            const errorMsg = failedStage?.error || 'Trace returned no mapped row';
-            log('Silver Preview', 'error', errorMsg);
-          }
-        } else { log('Silver Preview', 'error', 'No preview data fetched'); }
-      } catch (e) { log('Silver Preview', 'error', e?.response?.data?.detail || e.message); }
+      setBpSaved(true); 
+      markStep(2, 'ok'); 
+      log('Save Blueprints', 'ok', `${bps.length} fields activated via JMESPath`); 
+      toast('JMESPath Blueprints Activated!', 'success');
       
-    } catch(e) { const msg=e?.response?.data?.detail||'Failed'; markStep(2,'error'); log('Save Blueprints','error',msg); toast(msg,'error'); }
+      await refreshPreview();
+      
+    } catch(e) { 
+      const msg = e?.response?.data?.detail || 'Failed'; 
+      markStep(2, 'error'); 
+      log('Save Blueprints', 'error', msg); 
+      toast(msg, 'error'); 
+    }
     finally { setBpSaving(false); }
   };
 
@@ -154,8 +189,69 @@ export default function ApiWizard() {
     finally { setLoading(false); }
   };
 
-  const reset = () => { setStep(0); setHighest(0); setResult(null); setPreview(null); setPreviewErr(null); setBPs([blankBP()]); setRules([]); setBpSaved(false); setStepStatus({}); setActLog([]); setForm({ source_id:'', api_url:'', method:'GET', headers:'', body_template:'', poll_interval_seconds:300, description:'' }); };
-  const canNext = () => { if (step===0) return form.source_id.trim().length>0; if (step===1) return preview && preview.total_records>0; if (step===2) return bpSaved; return true; };
+  const [script, setScript] = useState('');
+  const [scriptActive, setScriptActive] = useState(false);
+  const [scriptSaving, setScriptSaving] = useState(false);
+
+  // Load script when source_id changes or step 2 is entered
+  useEffect(() => {
+    if (step === 2 && form.source_id) {
+      getMappingScript(form.source_id)
+        .then(data => {
+          if (data?.mapping_script) {
+            setScript(data.mapping_script);
+            setScriptActive(true);
+          }
+        }).catch(() => {});
+    }
+  }, [step, form.source_id]);
+
+  const saveScript = async (code) => {
+    setScriptSaving(true);
+    log('Save Mapping Script', 'pending', `Saving custom Python for ${form.source_id}...`);
+    try {
+      await saveMappingScript(form.source_id, code);
+      setScript(code);
+      setScriptActive(!!code);
+      toast('Script saved!', 'success');
+      log('Save Mapping Script', 'ok', 'Custom script updated');
+      await refreshPreview();
+    } catch (e) {
+      log('Save Mapping Script', 'error', e?.response?.data?.detail || e.message);
+      toast('Failed to save script', 'error');
+    } finally {
+      setScriptSaving(false);
+    }
+  };
+
+  const clearScript = async () => {
+    log('Clear Script', 'pending', 'Reverting to JMESPath blueprints...');
+    try {
+      await saveMappingScript(form.source_id, null);
+      setScript('');
+      setScriptActive(false);
+      log('Clear Script', 'ok', 'Script removed');
+      await refreshPreview();
+    } catch (e) {
+      log('Clear Script', 'error', e?.response?.data?.detail || e.message);
+    }
+  };
+
+  const reset = () => { setStep(0); setHighest(0); setResult(null); setPreview(null); setPreviewErr(null); setBPs([blankBP()]); setRules([]); setBpSaved(false); setStepStatus({}); setActLog([]); setForm({ source_id:'', api_url:'', method:'GET', headers:'', body_template:'', poll_interval_seconds:300, description:'' }); setScript(''); setScriptActive(false); };
+  const canNext = () => { 
+    if (step === 0) return form.source_id.trim().length > 0; 
+    if (step === 1) return preview && preview.total_records > 0; 
+    if (step === 2) return bpSaved || scriptActive; 
+    return true; 
+  };
+
+  const handleSetBPs = (updater) => {
+    setBPs(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      setBpSaved(false);
+      return next;
+    });
+  };
   // eslint-disable-next-line no-unused-vars
   const upd = (i,k,v) => { setBPs(a=>a.map((b,j)=>j===i?{...b,[k]:v}:b)); setBpSaved(false); };
 
@@ -246,14 +342,24 @@ export default function ApiWizard() {
       {/* ═══ Step 2: Blueprints ═══ */}
       {step===2 && (
         <JMESPathCanvas 
+          sourceId={form.source_id}
           preview={preview}
           bps={bps} 
-          setBPs={setBPs} 
+          setBPs={handleSetBPs} 
           bpSaving={bpSaving} 
           bpSaved={bpSaved} 
           saveBPs={saveBPs} 
           blankBP={blankBP} 
           silverPreview={silverPreview}
+          refreshPreview={refreshPreview}
+          script={script}
+          setScript={setScript}
+          scriptActive={scriptActive}
+          scriptSaving={scriptSaving}
+          saveScript={saveScript}
+          clearScript={clearScript}
+          scriptLogs={scriptLogs}
+          scriptError={scriptError}
         />
       )}
 

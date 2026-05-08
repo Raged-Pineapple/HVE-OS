@@ -191,7 +191,7 @@ async def preview_api(config: APISourceConfig):
             req_headers.setdefault("User-Agent", "HVE-OS/1.0")
             kwargs = {
                 "headers": req_headers,
-                "timeout": aiohttp.ClientTimeout(total=15)
+                "timeout": aiohttp.ClientTimeout(total=45)
             }
             if config.method.upper() == "POST" and config.body_template:
                 kwargs["json"] = config.body_template

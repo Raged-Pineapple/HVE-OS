@@ -1,6 +1,6 @@
 import React, { memo, useState, useEffect, useRef } from 'react';
 import { useEdges, useNodes, Handle, Position, useReactFlow } from 'reactflow';
-import { GitMerge, Plus, X, ChevronDown, ChevronRight, Zap } from 'lucide-react';
+import { GitMerge, Plus, X, ChevronDown, ChevronRight, Zap, Search } from 'lucide-react';
 import BaseNode from '../BaseNode';
 import { getEntitiesByLabel, getEntityKeys } from '../../../api/client.js';
 import { attrKeyFromHandle, resolveAttrValue, parsePythonLiteral } from '../../../utils/pipelineUtils.js';
@@ -11,6 +11,206 @@ export const config = {
   label: 'Combine',
   icon: GitMerge,
   color: '#a855f7',
+  SettingsForm: ({ nodeId, formData, handleChange, nodes, edges }) => {
+    const slots = formData.slots || [];
+    const logicEdges = edges.filter(e => e.target === nodeId && e.targetHandle === 'logic-broadcast');
+    const logicNodes = logicEdges.map(e => nodes.find(n => n.id === e.source)).filter(Boolean);
+    
+    const [searchTerm, setSearchTerm] = useState('');
+
+    const updateLogicConfig = (sourceId, field, value) => {
+      const current = formData.logicConfig || {};
+      const next = { ...current, [sourceId]: { ...(current[sourceId] || { op: 'add' }), [field]: value } };
+      handleChange('logicConfig', next);
+    };
+
+    const updateSlotLogicRules = (slotId, type, item, checked) => {
+      const nextSlots = slots.map(s => {
+        if (s.id !== slotId) return s;
+        const rules = s.logicRules || {};
+        const currentItems = rules[type] || [];
+        const nextItems = checked 
+          ? [...currentItems, item]
+          : currentItems.filter(i => i !== item);
+        return { ...s, logicRules: { ...rules, [type]: nextItems } };
+      });
+      handleChange('slots', nextSlots);
+    };
+
+    // Extract all unique entities and attributes from the node's current assignments
+    // Note: In a real app we might want to pass dataRows here, but we can infer from existing assignments
+    const allEntities = new Set();
+    const allAttributes = new Set();
+    slots.forEach(s => {
+      Object.values(s.assignments || {}).forEach(a => {
+        if (a.entityName) allEntities.add(a.entityName);
+        if (a.attrKey) allAttributes.add(a.attrKey);
+      });
+    });
+
+    const entitiesList = Array.from(allEntities).sort();
+    const attributesList = Array.from(allAttributes).sort();
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+        {/* Logic Broadcast Config */}
+        {logicNodes.length > 0 && (
+          <div>
+            <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 12, letterSpacing: '0.05em' }}>Logic Broadcast Configuration</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {logicNodes.map(node => (
+                <div key={node.id} style={{ padding: '10px', background: 'var(--bg-elevated)', borderRadius: 8, border: '1px solid var(--border-subtle)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                    <Zap size={12} color="#fbbf24" />
+                    <span style={{ fontSize: '0.7rem', fontWeight: 600 }}>Source: {node.id}</span>
+                  </div>
+                  <div className="field">
+                    <label style={{ fontSize: '0.55rem' }}>Operation</label>
+                    <select
+                      value={formData.logicConfig?.[node.id]?.op || 'add'}
+                      onChange={(e) => updateLogicConfig(node.id, 'op', e.target.value)}
+                      style={{ fontSize: '0.65rem' }}
+                    >
+                      <option value="add">Add (+)</option>
+                      <option value="subtract">Subtract (-)</option>
+                      <option value="multiply">Multiply (×)</option>
+                      <option value="divide">Divide (÷)</option>
+                    </select>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Per-Slot Logic Filtering */}
+        {slots.length > 0 && logicNodes.length > 0 && (
+          <div>
+            <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 12, letterSpacing: '0.05em' }}>Logic Filtering (Per Slot)</p>
+            <div style={{ position: 'relative', marginBottom: 12 }}>
+              <Search size={12} style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', opacity: 0.4 }} />
+              <input 
+                placeholder="Filter attributes..."
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+                style={{ paddingLeft: 26, fontSize: '0.65rem' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {slots.map(slot => (
+                <div key={slot.id} style={{ padding: '10px', background: 'var(--bg-elevated)', borderRadius: 8, border: `1px solid ${slot.applyLogic ? '#fbbf24' : 'var(--border-subtle)'}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#a855f7' }} />
+                      <span style={{ fontSize: '0.7rem', fontWeight: 700 }}>{slot.name}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <Zap size={10} color={slot.applyLogic ? "#fbbf24" : "var(--text-muted)"} />
+                      <span style={{ fontSize: '0.55rem', color: slot.applyLogic ? "#fbbf24" : "var(--text-muted)" }}>{slot.applyLogic ? 'Active' : 'Disabled'}</span>
+                    </div>
+                  </div>
+
+                  {slot.applyLogic && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {/* Entity Filters */}
+                      <div>
+                        <label style={{ fontSize: '0.55rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 6, display: 'block' }}>Target Entities</label>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {entitiesList.map(entity => (
+                            <button
+                              key={entity}
+                              onClick={() => updateSlotLogicRules(slot.id, 'entities', entity, !(slot.logicRules?.entities || entitiesList).includes(entity))}
+                              style={{
+                                fontSize: '0.55rem',
+                                padding: '2px 6px',
+                                borderRadius: 4,
+                                border: '1px solid',
+                                borderColor: (slot.logicRules?.entities || entitiesList).includes(entity) ? '#fbbf24' : 'var(--border-subtle)',
+                                background: (slot.logicRules?.entities || entitiesList).includes(entity) ? 'rgba(251,191,36,0.1)' : 'transparent',
+                                color: (slot.logicRules?.entities || entitiesList).includes(entity) ? '#fbbf24' : 'var(--text-muted)',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              {entity}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Attribute Filters */}
+                      <div>
+                        <label style={{ fontSize: '0.55rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 6, display: 'block' }}>Target Attributes</label>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {attributesList
+                            .filter(attr => attr.toLowerCase().includes(searchTerm.toLowerCase()))
+                            .map(attr => (
+                            <button
+                              key={attr}
+                              onClick={() => updateSlotLogicRules(slot.id, 'attributes', attr, !(slot.logicRules?.attributes || attributesList).includes(attr))}
+                              style={{
+                                fontSize: '0.55rem',
+                                padding: '2px 6px',
+                                borderRadius: 4,
+                                border: '1px solid',
+                                borderColor: (slot.logicRules?.attributes || attributesList).includes(attr) ? '#fbbf24' : 'var(--border-subtle)',
+                                background: (slot.logicRules?.attributes || attributesList).includes(attr) ? 'rgba(251,191,36,0.1)' : 'transparent',
+                                color: (slot.logicRules?.attributes || attributesList).includes(attr) ? '#fbbf24' : 'var(--text-muted)',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              {attr}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div>
+          <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 12, letterSpacing: '0.05em' }}>Output Preview</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {slots.map((slot, i) => {
+              const res = i === 0 ? formData.resolvedEntity : formData[`resolvedEntity_${slot.name}`];
+              const isEmpty = !res || Object.keys(res).length === 0;
+              return (
+                <div key={slot.id} style={{ 
+                  padding: '10px', 
+                  background: 'var(--bg-elevated)', 
+                  borderRadius: 8, 
+                  border: '1px solid var(--border-subtle)' 
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                    <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#a855f7' }} />
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700 }}>{slot.name}</span>
+                    <span className="badge" style={{ fontSize: '0.55rem' }}>{slot.strategy}</span>
+                  </div>
+                  <pre style={{ 
+                    margin: 0, 
+                    padding: '8px', 
+                    background: 'rgba(0,0,0,0.2)', 
+                    borderRadius: 6, 
+                    fontSize: '0.7rem', 
+                    color: isEmpty ? 'var(--text-muted)' : 'var(--text-secondary)',
+                    fontFamily: 'JetBrains Mono',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-all'
+                  }}>
+                    {isEmpty ? '{ } — no attrs included' : JSON.stringify(res, null, 2)}
+                  </pre>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  }
 };
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -76,14 +276,26 @@ const fetchUpstreamEntities = async (srcNode, nodes, edges) => {
 
 function buildOutput(slot, dataRows, transforms) {
   const result = {};
+  const rules = slot.logicRules || {};
+  
   for (const row of dataRows) {
     const asgn = (slot.assignments || {})[row.rowKey];
     if (!asgn || asgn.included === false) continue;
     if (!checkCondition(row.value, asgn.condition || 'always')) continue;
+    
     const key = (slot.strategy === 'rename' && asgn.outputKey)
       ? asgn.outputKey
       : row.attrKey;
-    result[key] = (slot.applyLogic && transforms.length) ? applyTransforms(row.value, transforms) : row.value;
+      
+    // Determine if logic should be applied to this specific row
+    let applyLogicToRow = slot.applyLogic && transforms.length > 0;
+    if (applyLogicToRow && (rules.entities || rules.attributes)) {
+      const entityMatch = !rules.entities || rules.entities.includes(row.entityName);
+      const attrMatch   = !rules.attributes || rules.attributes.includes(row.attrKey);
+      applyLogicToRow = entityMatch && attrMatch;
+    }
+
+    result[key] = applyLogicToRow ? applyTransforms(row.value, transforms) : row.value;
   }
   return result;
 }
@@ -129,16 +341,41 @@ export default memo(({ id, data, selected }) => {
         const src = nodes.find(n => n.id === edge.source);
         if (!src) continue;
 
-        // Logic connections MUST connect to the top logic handle
-        if (edge.targetHandle === 'combine-logic-in') {
+        // 1. Logic connections (attached from the TOP logic handle)
+        if (edge.targetHandle === 'logic-broadcast') {
+          const config = data.logicConfig?.[src.id] || { op: 'add' };
+          
           if (src.type === 'add') {
             txs.push({
-              op:           'add',
-              constant:     src.data?.constant ?? 0,
+              op:           config.op,
+              constant:     src.data?.resolvedEntity?.sum ?? src.data?.constant ?? 0,
               constantType: src.data?.constantType || 'int',
               edgeId:       edge.id,
             });
+          } else {
+            // Treat other nodes connected to logic handle as constant broadcasts
+            const sHandle = edge.sourceHandle || 'default';
+            const attrKey = attrKeyFromHandle(sHandle);
+            const entity  = src.data?.resolvedEntity ?? null;
+            const val     = resolveAttrValue(entity, attrKey);
+            if (val !== null && val !== undefined && !isNaN(Number(val))) {
+              txs.push({
+                op:           config.op,
+                constant:     val,
+                constantType: Number.isInteger(Number(val)) ? 'int' : 'float',
+                edgeId:       edge.id,
+              });
+            }
           }
+          continue;
+        }
+
+        // 2. Data connections (attached from the LEFT handle)
+        // We handle both 'data-target' and null/undefined for backward compatibility
+        if (edge.targetHandle === 'data-target' || !edge.targetHandle) {
+          // Proceed to resolve as data
+        } else {
+          // If it's connected to some other unknown handle, skip for now
           continue;
         }
 
@@ -355,18 +592,76 @@ export default memo(({ id, data, selected }) => {
       setIsExpanded={setIsExpanded}
       color={purple}
       hideDefaultSource={true}
+      hideDefaultTarget={true}
     >
-      {/* Top Handle for External Logic (Add Node) */}
+      
+      {/* ── TARGET HANDLES ── */}
+      
+      {/* 1. Main Data Target (Left) */}
       <Handle
         type="target"
-        id="combine-logic-in"
-        position={Position.Top}
+        id="data-target"
+        position={Position.Left}
         style={{
-          background: '#fbbf24', // yellow for logic
-          width: 12, height: 12,
-          border: '2px solid var(--bg-surface)'
+          left: -6,
+          background: 'var(--amber)',
+          width: 12,
+          height: 12,
+          border: '2px solid var(--bg-surface)',
+          zIndex: 10
         }}
       />
+
+      {/* 2. Logic Broadcast Target (Top) */}
+      <Handle
+        type="target"
+        id="logic-broadcast"
+        position={Position.Top}
+        style={{
+          background: '#fbbf24',
+          width: 12,
+          height: 12,
+          border: '2px solid var(--bg-surface)',
+          top: -6,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 10
+        }}
+      />
+
+      {/* ── LOGIC BROADCAST BAR (Top Distinction) ── */}
+      {transforms.length > 0 && (
+        <div style={{
+          margin: '10px 12px 0',
+          padding: '6px 10px',
+          background: 'rgba(251,191,36,0.04)',
+          border: '1px dashed rgba(251,191,36,0.25)',
+          borderRadius: 8,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8,
+          alignItems: 'center'
+        }}>
+          <Zap size={11} color="#fbbf24" />
+          <span style={{ fontSize: '0.52rem', color: '#fbbf24', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Logic Broadcast:
+          </span>
+          {transforms.map(t => (
+            <div key={t.edgeId} style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              padding: '2px 6px', borderRadius: 4,
+              background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.15)',
+            }}>
+              <span style={{ fontSize: '0.55rem', color: '#fbbf24', fontWeight: 700 }}>
+                +{t.constant}
+              </span>
+              <span style={{ fontSize: '0.42rem', color: '#fbbf24', opacity: 0.6, fontFamily: 'JetBrains Mono' }}>
+                {t.constantType}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div style={{
         display: 'flex',
@@ -386,9 +681,11 @@ export default memo(({ id, data, selected }) => {
           paddingRight: 10,
           borderRight: '1px solid var(--border-subtle)',
         }}>
-          <span style={{ fontSize: '0.46rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 2 }}>
-            Inputs
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2, position: 'relative' }}>
+            <span style={{ fontSize: '0.46rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+              Inputs
+            </span>
+          </div>
 
           {dataRows.length === 0 && transforms.length === 0 && (
             <p style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontStyle: 'italic', margin: 0 }}>
@@ -444,12 +741,6 @@ export default memo(({ id, data, selected }) => {
                       padding: '3px 6px', borderRadius: 5,
                       background: purpleDim, border: `1px solid ${purpleBdr}`,
                     }}>
-                      <Handle
-                        type="target"
-                        id={row.handle}
-                        position={Position.Left}
-                        style={{ background: purple, width: 8, height: 8, border: '2px solid var(--bg-surface)' }}
-                      />
                       <span style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {row.attrKey}
                       </span>
@@ -462,21 +753,6 @@ export default memo(({ id, data, selected }) => {
               );
             });
           })()}
-
-          {/* Transform rows (AddNode connections) */}
-          {transforms.map(t => (
-            <div key={t.edgeId} style={{
-              display: 'flex', alignItems: 'center', gap: 5,
-              padding: '3px 6px', borderRadius: 5,
-              background: yellowDim, border: `1px dashed ${yellowBdr}`,
-            }}>
-              <Zap size={9} color="#fbbf24" style={{ flexShrink: 0 }} />
-              <span style={{ fontSize: '0.55rem', color: '#fbbf24', flex: 1 }}>
-                +{t.constant} <span style={{ opacity: 0.6 }}>({t.constantType})</span>
-              </span>
-              <span style={{ fontSize: '0.45rem', color: '#fbbf24', opacity: 0.7 }}>broadcast</span>
-            </div>
-          ))}
         </div>
 
         {/* ── RIGHT: output slots ───────────────────────────────────────── */}
@@ -552,20 +828,25 @@ export default memo(({ id, data, selected }) => {
                     }}
                   />
 
-                  {/* Strategy selector */}
-                  <select
-                    value={slot.strategy}
-                    onClick={e => e.stopPropagation()}
+                  {/* Logic Toggle */}
+                  <button
                     onMouseDown={e => e.stopPropagation()}
-                    onChange={e => updateSlot(slot.id, { strategy: e.target.value })}
+                    onClick={e => { e.stopPropagation(); updateSlot(slot.id, { applyLogic: !slot.applyLogic }); }}
+                    title={slot.applyLogic ? "Disable logic for this slot" : "Enable logic for this slot"}
                     style={{
-                      fontSize: '0.48rem', background: 'var(--bg-surface)',
-                      border: '1px solid var(--border-subtle)', borderRadius: 3,
-                      color: 'var(--text-muted)', padding: '1px 3px', flexShrink: 0,
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: slot.applyLogic ? '#fbbf24' : 'var(--text-muted)',
+                      padding: 2,
+                      display: 'flex',
+                      alignItems: 'center',
+                      transition: 'color 0.2s',
+                      opacity: transforms.length > 0 ? 1 : 0.4
                     }}
                   >
-                    {STRATEGIES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                  </select>
+                    <Zap size={10} fill={slot.applyLogic ? '#fbbf24' : 'none'} />
+                  </button>
 
                   {/* Remove */}
                   <button
@@ -593,6 +874,23 @@ export default memo(({ id, data, selected }) => {
                 {/* Slot body (expanded) */}
                 {isOpen && (
                   <div style={{ padding: '6px 8px 8px', borderTop: `1px solid ${purpleBdr}` }}>
+
+                    {/* Strategy Selector (Moved here) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, paddingBottom: 6, borderBottom: '1px dashed var(--border-subtle)' }}>
+                      <span style={{ fontSize: '0.5rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Strategy</span>
+                      <select
+                        value={slot.strategy}
+                        onMouseDown={e => e.stopPropagation()}
+                        onChange={e => updateSlot(slot.id, { strategy: e.target.value })}
+                        style={{
+                          fontSize: '0.48rem', background: 'var(--bg-surface)',
+                          border: '1px solid var(--border-subtle)', borderRadius: 3,
+                          color: purple, padding: '1px 4px', outline: 'none', fontWeight: 600
+                        }}
+                      >
+                        {STRATEGIES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                      </select>
+                    </div>
 
                     {dataRows.length === 0 && (
                       <p style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontStyle: 'italic', margin: 0 }}>
@@ -734,29 +1032,12 @@ export default memo(({ id, data, selected }) => {
                       });
                     })()}
 
-                    {/* Output preview */}
-                    <div style={{
-                      marginTop: 6, padding: '4px 7px',
-                      background: 'rgba(0,0,0,0.22)', borderRadius: 5,
-                      border: '1px solid var(--border-subtle)',
-                    }}>
-                      <span style={{ fontSize: '0.42rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>output preview</span>
-                      <pre style={{
-                        margin: '2px 0 0',
-                        fontSize: '0.52rem', color: 'var(--text-secondary)',
-                        fontFamily: 'JetBrains Mono', whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-all',
-                      }}>
-                        {preview === '{}' ? '{ }  — no attrs included' : preview}
-                      </pre>
-                    </div>
-
                     {/* Transform summary */}
                     {transforms.length > 0 && slot.applyLogic && (
                       <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 4 }}>
                         <Zap size={9} color="#fbbf24" />
                         <span style={{ fontSize: '0.5rem', color: '#fbbf24' }}>
-                          AddNode broadcast applied: +{transforms[0].constant} ({transforms[0].constantType})
+                          AddNode broadcast applied: +{transforms[0].constant}
                         </span>
                       </div>
                     )}

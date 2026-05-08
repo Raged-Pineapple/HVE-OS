@@ -82,8 +82,8 @@ async def get_entities_by_label(source_id: str, limit: int = 25):
     """
     neo4j = get_neo4j_service()
     
-    # Capitalize source_id for label (e.g., 'blr' -> 'Blr')
-    label = source_id.capitalize()
+    # PascalCase source_id for label (e.g., 'military_bases' -> 'MilitaryBases')
+    label = "".join(word.capitalize() for word in source_id.split("_"))
     
     # Labels cannot be parameterized with $, so we format the string.
     query = f"MATCH (n:{label}) RETURN properties(n) as props LIMIT $limit"

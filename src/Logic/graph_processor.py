@@ -82,10 +82,8 @@ class GraphProcessor:
                 msg = self._consumer.poll(timeout=1.0)
 
                 if msg is None:
-                    self._check_flush_timeout()
-                    continue
-
-                if msg.error():
+                    pass
+                elif msg.error():
                     if msg.error().code() == KafkaError._PARTITION_EOF:
                         continue
                     logger.error(f"Kafka error in GraphProcessor: {msg.error()}")
@@ -102,6 +100,7 @@ class GraphProcessor:
                 except Exception as e:
                     logger.error(f"Error in GraphProcessor row processing: {e}")
                 
+                # Move this outside the 'if msg is None' block so it flushes even when busy
                 self._check_flush_timeout()
 
             # Flush remaining on shutdown
@@ -133,13 +132,25 @@ class GraphProcessor:
                 # If no blueprint exists, we use the "Name Logic" to create a standard 
                 # entity mapping that mirrors the Silver Table structure.
                 label = "".join(word.capitalize() for word in source_id.split("_"))
+                
+                # Check for primary key in mapping blueprints
+                pk_field = "_hve_id"
+                try:
+                    mapping_bps = db_service.get_blueprints(source_id)
+                    for mbp in mapping_bps:
+                        if mbp.get("is_primary_key"):
+                            pk_field = mbp["target_field"]
+                            break
+                except Exception:
+                    pass
+
                 # ── SMART DEFAULT TEMPLATE ──
-                # We merge on _hve_id, apply all properties, and link to a Source node
-                # so the entities are discoverable via the /entities/{source_id} API.
+                # We merge on the PK field (defaulting to _hve_id), apply all properties, 
+                # and link to a Source node so the entities are discoverable.
                 default_template = (
                     f"UNWIND $rows AS row "
                     f"MERGE (s:Source {{ source_id: row._source_id }}) "
-                    f"MERGE (n:Entity:{label} {{ _hve_id: row._hve_id }}) "
+                    f"MERGE (n:Entity:{label} {{ {pk_field}: row.{pk_field} }}) "
                     f"SET n += row "
                     f"MERGE (n)-[:PART_OF_SOURCE]->(s)"
                 )
@@ -173,19 +184,57 @@ class GraphProcessor:
         if not messages:
             return
             
-        bp = self._get_blueprint(source_id)
-        if bp:
-            # Cypher template mode
-            try:
+        log_id = None
+        try:
+            # ── Log Start in Control Plane ──
+            log_id = db_service.log_processing_start(source_id, "GRAPH_INGEST")
+            
+            bp = self._get_blueprint(source_id)
+            if bp:
+                # Cypher template mode
                 # ── SANITIZATION ──
                 # Ensure we don't send nested maps to Neo4j properties
                 safe_rows = self._sanitize_rows(messages)
                 self._neo4j.execute_write(bp["cypher_template"], {"rows": safe_rows})
+                
+                # ── Log Completion ──
+                db_service.log_processing_complete(
+                    log_id=log_id,
+                    silver_path=f"neo4j:{source_id}",
+                    records_in=len(messages),
+                    records_passed=len(messages),
+                    records_quarantined=0,
+                    status="COMPLETED"
+                )
                 logger.info(f"GraphProcessor: Batch of {len(messages)} applied via Blueprint for {source_id}")
-            except Exception as e:
-                logger.error(f"GraphProcessor Blueprint execution failed for {source_id}: {e}")
-        else:
-            logger.warning(f"GraphProcessor: No blueprint found for {source_id}. Skipping Graph ingestion.")
+            else:
+                logger.warning(f"GraphProcessor: No blueprint found for {source_id}. Skipping Graph ingestion.")
+                if log_id:
+                    db_service.log_processing_complete(
+                        log_id=log_id,
+                        silver_path="",
+                        records_in=len(messages),
+                        records_passed=0,
+                        records_quarantined=0,
+                        status="SKIPPED",
+                        error_message="No Graph Blueprint found."
+                    )
+        except Exception as e:
+            error_msg = f"Graph Ingestion Failed: {str(e)}"
+            logger.error(f"[{source_id}] {error_msg}")
+            if log_id:
+                try:
+                    db_service.log_processing_complete(
+                        log_id=log_id,
+                        silver_path="",
+                        records_in=len(messages),
+                        records_passed=0,
+                        records_quarantined=0,
+                        status="FAILED",
+                        error_message=error_msg
+                    )
+                except Exception:
+                    pass
 
     def sync_table_to_graph(self, source_id: str):
         """Batch sync from Silver via DuckDB."""
