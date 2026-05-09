@@ -81,10 +81,10 @@ class Neo4jService:
         """Deprecated: Use execute_query or execute_write instead."""
         return self.execute_query(query, parameters)
 
-    def upsert_entity(self, label: str, properties: dict, merge_key: str = None):
+    def upsert_entity(self, properties: dict, merge_key: str = None):
         """
         Upserts an entity node based on a merge key (defaults to _hve_id).
-        Adds a generic label based on source_id and links to a Source node.
+        Adds an automatic label based on source_id and links to a Source node.
         """
         # Determine the unique identifier for merging
         # If merge_key is provided (e.g. 'callsign'), use it.
@@ -103,6 +103,9 @@ class Neo4jService:
             return
 
         source_id = properties.get("_source_id", "unknown")
+        
+        # Automatically generate PascalCase label from source_id (matching graph.py logic)
+        label = "".join(word.capitalize() for word in source_id.split("_"))
         
         # We dynamicallly inject the merge key name into the MERGE clause.
         # We ensure it's a safe alphanumeric string to prevent injection.

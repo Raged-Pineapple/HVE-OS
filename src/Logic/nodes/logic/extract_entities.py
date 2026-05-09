@@ -169,27 +169,33 @@ class ExtractEntitiesNode(BaseNode):
         
         pinned_entities = []
         unpinned_entities = []
+        dynamic_outputs = {}
         
         for entity in extracted:
             name = self._get_entity_name(entity, display_property)
             
             if name in pinned_names:
                 pinned_entities.append(entity)
+                dynamic_outputs[f"entity-out-pinned-{name}"] = entity
             else:
                 unpinned_entities.append(entity)
+                dynamic_outputs[f"entity-out-{name}"] = entity
         
         logger.info(f"ExtractEntities: Extracted {len(extracted)} entities, {len(pinned_entities)} pinned, {len(unpinned_entities)} unpinned")
         
+        base_outputs = {
+            "extracted": extracted,
+            "pinned": pinned_entities,
+            "unpinned": unpinned_entities,
+            "count": len(extracted),
+            "pinned_count": len(pinned_entities),
+            "unpinned_count": len(unpinned_entities)
+        }
+        base_outputs.update(dynamic_outputs)
+
         return NodeResult(
             success=True,
-            outputs={
-                "extracted": extracted,
-                "pinned": pinned_entities,
-                "unpinned": unpinned_entities,
-                "count": len(extracted),
-                "pinned_count": len(pinned_entities),
-                "unpinned_count": len(unpinned_entities)
-            },
+            outputs=base_outputs,
             metadata={
                 "strategy": strategy,
                 "total_input": len(input_entities),

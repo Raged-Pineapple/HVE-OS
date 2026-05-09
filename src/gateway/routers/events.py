@@ -17,6 +17,8 @@ router = APIRouter(prefix="/api/v1", tags=["Stream"])
 clients: Set[WebSocket] = set()
 clients_lock = asyncio.Lock()
 
+_engine_loop = None
+
 
 def _dump_json(message: dict) -> str:
     """Helper to safely JSON dump massive objects off the main thread."""
@@ -79,7 +81,8 @@ class ReactiveGraphEngine:
     def trigger_source(self, source_id):
         """Neo4j event hook: Directly target nodes bound to this specific data source."""
         for n_id, node in self.nodes.items():
-            if node.get('data', {}).get('source_id') == source_id:
+            data = node.get('data', {})
+            if data.get('source_id') == source_id or data.get('tableName') == source_id or data.get('id') == source_id:
                 self.trigger_node(n_id)
 
     def trigger_node(self, node_id):
@@ -130,7 +133,7 @@ class ReactiveGraphEngine:
                             
                             await broadcast({
                                 'type': 'node_output', 'nodeId': node_id,
-                                'sourceId': node.get('data', {}).get('source_id'),
+                                'sourceId': node.get('data', {}).get('source_id') or node.get('data', {}).get('tableName') or node.get('data', {}).get('id'),
                                 'outputs': result.outputs, 'success': result.success
                             })
                             
@@ -154,7 +157,10 @@ engine = ReactiveGraphEngine()
 def trigger_graph_execution(is_data_update=True, source_id=None):
     """External entrypoint for Neo4j updates."""
     if is_data_update and source_id:
-        engine.trigger_source(source_id)
+        if _engine_loop and _engine_loop.is_running():
+            _engine_loop.call_soon_threadsafe(engine.trigger_source, source_id)
+        else:
+            engine.trigger_source(source_id)
 
 
 @router.websocket("/api/v1/ws/graph") # Force absolute path to bypass FastAPI prefix bugs
@@ -165,6 +171,9 @@ async def graph_websocket(websocket: WebSocket):
     Frontend connects to send graph state and receive execution results.
     """
     
+    global _engine_loop
+    _engine_loop = asyncio.get_running_loop()
+
     logger.info(f"🔥 Incoming WebSocket connection attempt from: {websocket.client}")
 
     await websocket.accept()
@@ -231,4 +240,22 @@ async def get_ws_status():
 
 
 def start_executor():
+    global _engine_loop
+    try:
+        _engine_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+
     logger.info("Reactive Graph Engine initialized and actively listening for events.")
+    try:
+        from services import event_service
+        
+        def handle_source_update(payload):
+            # Safely handle both string payloads or dictionary payloads
+            source_id = payload.get("source_id") if isinstance(payload, dict) else str(payload)
+            logger.info(f"Graph engine caught source_update event for: {source_id}")
+            trigger_graph_execution(is_data_update=True, source_id=source_id)
+            
+        event_service.subscribe("source_update", handle_source_update)
+    except Exception as e:
+        logger.error(f"Failed to subscribe Reactive Graph Engine to events: {e}")

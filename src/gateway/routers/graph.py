@@ -9,6 +9,23 @@ from models import GraphBlueprintCreate, GraphBlueprintInfo, GoldRegistryInfo
 from services import db_service
 from services.neo4j_service import get_neo4j_service
 from Logic import graph_processor
+import json
+import ast
+
+def _deserialize_props(props: dict) -> dict:
+    """Parse stringified JSON/Python objects back into native dicts/lists."""
+    if not props:
+        return props
+    for k, v in list(props.items()):
+        if isinstance(v, str) and (v.strip().startswith('{') or v.strip().startswith('[')):
+            try:
+                props[k] = json.loads(v)
+            except Exception:
+                try:
+                    props[k] = ast.literal_eval(v)
+                except Exception:
+                    pass
+    return props
 
 router = APIRouter(tags=["Graph Mapping Blueprints"])
 
@@ -90,7 +107,7 @@ async def get_entities_by_label(source_id: str, limit: int = 25):
     
     try:
         results = neo4j.execute_query(query, {"limit": limit})
-        return [r["props"] for r in results]
+        return [_deserialize_props(r["props"]) for r in results]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Neo4j Error: {str(e)}")
 
@@ -109,7 +126,7 @@ async def get_entities(source_id: str, limit: int = 100):
     """
     try:
         results = neo4j.execute_query(query, {"source_id": source_id, "limit": limit})
-        return [r["props"] for r in results]
+        return [_deserialize_props(r["props"]) for r in results]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Neo4j Error: {str(e)}")
 
@@ -120,10 +137,10 @@ async def list_graph_sources():
     Retrieve all Source nodes from the Neo4j Knowledge Graph.
     """
     neo4j = get_neo4j_service()
-    query = "MATCH (s:Source) RETURN properties(s) as props"
+    query = "MATCH (s) WHERE s.source_id IS NOT NULL RETURN properties(s) as props"
     try:
         results = neo4j.execute_query(query)
-        return [r["props"] for r in results]
+        return [_deserialize_props(r["props"]) for r in results]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Neo4j Error: {str(e)}")
 
@@ -156,11 +173,6 @@ async def get_entity_preview(source_id: str, prop: str):
     """
     try:
         results = neo4j.execute_query(query, {"source_id": source_id})
-        return [{"original": r["original"], "value": r["value"]} for r in results]
+        return [{"original": _deserialize_props(r["original"]), "value": r["value"]} for r in results]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Neo4j Error: {str(e)}")
-
-
-
-
-

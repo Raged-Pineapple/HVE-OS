@@ -1,41 +1,21 @@
 import React, { memo, useState, useEffect, useRef } from 'react';
 import { useEdges, useNodes, Handle, Position, useReactFlow } from 'reactflow';
-import { Split, Database, FileJson, Layers } from 'lucide-react';
-import { getEntitiesByLabel, getEntityKeys } from '../../../api/client.js';
+import { Split, FileJson, Layers, Search, CheckCircle2 } from 'lucide-react';
 import BaseNode from '../BaseNode';
-import { parsePythonLiteral } from '../../../utils/pipelineUtils.js';
 
 const resolveUpstreamData = async (incomingNodes, nodes, edges) => {
-  let sources = incomingNodes.filter(n => n.type === 'dataTrigger' && n.data?.id);
+  let sources = incomingNodes.filter(n => (n.type === 'dataTrigger' || n.type === 'source') && (n.data?.source_id || n.data?.id));
   if (sources.length > 0) {
-    const dataList = await getEntitiesByLabel(sources[0].data.id).catch(() => []);
-    return dataList;
+    if (sources[0].data?.data?.length > 0) {
+      return sources[0].data.data;
+    }
   }
   
   let extractNodes = incomingNodes.filter(n => n.type === 'extractEntities');
   if (extractNodes.length > 0) {
     const extNode = extractNodes[0];
-    const upEdges = edges.filter(e => e.target === extNode.id);
-    const upNodes = upEdges.map(e => nodes.find(n => n.id === e.source)).filter(Boolean);
-    const trig = upNodes.find(n => n.type === 'dataTrigger' && n.data?.id);
-    
-    if (trig) {
-      let dataList = await getEntitiesByLabel(trig.data.id).catch(() => []);
-      const strategy = extNode.data?.strategy || 'NER';
-      const label = extNode.data?.label || '';
-      
-      if (strategy === 'KeyPath' && label) {
-        dataList = dataList.flatMap(item => {
-          const parts = label.split('.');
-          let current = item;
-          for (let p of parts) {
-            if (current === null || current === undefined) break;
-            current = current[p];
-          }
-          return Array.isArray(current) ? current : (current ? [current] : []);
-        });
-      }
-      return dataList;
+    if (extNode.data?.extracted?.length > 0) {
+      return extNode.data.extracted;
     }
   }
   return [];
@@ -52,41 +32,27 @@ export const config = {
 
 function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
     const [entities, setEntities] = useState([]);
-    const [neo4jKeys, setNeo4jKeys] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
 
     const incomingEdges = edges.filter(e => e.target === nodeId);
     const incomingNodes = incomingEdges.map(e => nodes.find(n => n.id === e.source)).filter(Boolean);
-    const pinnedEdge = incomingEdges.find(e => e.sourceHandle && e.sourceHandle.startsWith('entity-out-pinned-'));
+    const specificEntityEdge = incomingEdges.find(e => e.sourceHandle && e.sourceHandle.startsWith('entity-out-'));
 
     useEffect(() => {
       if (incomingNodes.length > 0) {
         setLoading(true);
         
-        // Find source ID for Neo4j keys
-        let sourceId = null;
-        let sources = incomingNodes.filter(n => n.type === 'dataTrigger' && n.data?.id);
-        if (sources.length > 0) sourceId = sources[0].data.id;
-        else {
-          let extractNodes = incomingNodes.filter(n => n.type === 'extractEntities');
-          if (extractNodes.length > 0) {
-            const extNode = extractNodes[0];
-            const upEdges = edges.filter(e => e.target === extNode.id);
-            const upNodes = upEdges.map(e => nodes.find(n => n.id === e.source)).filter(Boolean);
-            const trig = upNodes.find(n => n.type === 'dataTrigger' && n.data?.id);
-            if (trig) sourceId = trig.data.id;
-          }
-        }
-
-        if (sourceId) {
-          getEntityKeys(sourceId).then(keys => setNeo4jKeys(keys)).catch(() => setNeo4jKeys([]));
-        }
-
         resolveUpstreamData(incomingNodes, nodes, edges)
           .then(dataList => {
             setEntities(dataList);
-            if (pinnedEdge) {
-              const pinnedName = pinnedEdge.sourceHandle.replace('entity-out-pinned-', '');
+            if (specificEntityEdge) {
+              let specificName = specificEntityEdge.sourceHandle;
+              if (specificName.startsWith('entity-out-pinned-')) {
+                specificName = specificName.replace('entity-out-pinned-', '');
+              } else if (specificName.startsWith('entity-out-')) {
+                specificName = specificName.replace('entity-out-', '');
+              }
               const extNode = incomingNodes.find(n => n.type === 'extractEntities');
               const propToUse = extNode?.data?.displayNameProperty || formData.displayNameProperty;
               
@@ -97,9 +63,6 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
                   let current = e;
                   for (let p of parts) {
                     if (current === null || current === undefined) break;
-                    if (typeof current === 'string' && current.trim().startsWith('{')) {
-                      try { current = JSON.parse(current.replace(/'/g, '"')); } catch (err) {}
-                    }
                     current = current[p];
                   }
                   if (current !== null && current !== undefined && typeof current !== 'object') {
@@ -107,7 +70,7 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
                   }
                 }
                 const name = customName || e.name || e.title || e.id || `Entity ${i + 1}`;
-                return name === pinnedName;
+                return name === specificName;
               });
               
               if (idx !== -1 && formData.selectedEntityIndex !== idx) {
@@ -121,30 +84,22 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
       } else {
         setEntities([]);
       }
-    }, [incomingNodes.length, nodes, edges, pinnedEdge, formData.displayNameProperty, formData.selectedEntityIndex]);
+    }, [incomingNodes.length, nodes, edges, specificEntityEdge, formData.displayNameProperty, formData.selectedEntityIndex]);
 
     const selectedEntityIndex = formData.selectedEntityIndex;
     const selectedEntity = selectedEntityIndex !== undefined && selectedEntityIndex !== '' ? entities[selectedEntityIndex] : null;
 
-    // Use Neo4j keys if available, fallback to entity parsing if not
-    const availableKeys = neo4jKeys.length > 0 ? new Set(neo4jKeys) : new Set();
-    if (neo4jKeys.length === 0) {
-      entities.forEach(item => {
-        Object.keys(item).forEach(k => {
-          availableKeys.add(k);
-          let val = item[k];
-          if (typeof val === 'string' && val.trim().startsWith('{')) {
-            try { 
-              const parsed = parsePythonLiteral(val);
-              if (parsed) val = parsed;
-            } catch (e) {}
-          }
-          if (val && typeof val === 'object' && !Array.isArray(val)) {
-            Object.keys(val).forEach(nk => availableKeys.add(`${k}.${nk}`));
-          }
-        });
+    // Parse keys directly from entities
+    const availableKeys = new Set();
+    entities.forEach(item => {
+      Object.keys(item).forEach(k => {
+        availableKeys.add(k);
+        let val = item[k];
+        if (val && typeof val === 'object' && !Array.isArray(val)) {
+          Object.keys(val).forEach(nk => availableKeys.add(`${k}.${nk}`));
+        }
       });
-    }
+    });
     const keyOptions = Array.from(availableKeys).sort();
 
     const getDisplayName = (ent, idx) => {
@@ -153,9 +108,6 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
         let current = ent;
         for (let i = 0; i < parts.length; i++) {
           if (current === null || current === undefined) break;
-          if (typeof current === 'string' && current.trim().startsWith('{')) {
-            try { current = JSON.parse(current.replace(/'/g, '"')); } catch (e) {}
-          }
           current = current[parts[i]];
         }
         if (current !== null && current !== undefined && typeof current !== 'object') {
@@ -165,17 +117,18 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
       return ent.name || ent.title || ent.id || `Entity ${idx + 1}`;
     };
 
-    const isAutoSelected = !!pinnedEdge;
+    const isAutoSelected = !!specificEntityEdge;
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         {!isAutoSelected && (
           <>
-            <div className="field">
-              <label>Display Name Property</label>
+                <div>
+                  <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Display Name Property</label>
               <select 
                 value={formData.displayNameProperty || ''} 
                 onChange={(e) => handleChange('displayNameProperty', e.target.value)}
+                    style={{ width: '100%', padding: '6px 8px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 6, color: 'var(--text-primary)', fontSize: '0.8rem' }}
               >
                 <option value="">-- Default (name, id, title) --</option>
                 {keyOptions.map(k => (
@@ -184,25 +137,47 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
               </select>
             </div>
 
-            <div className="field">
-              <label>Select Entity to Explode</label>
+                <div>
+                  <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginBottom: 8 }}>Select Entity to Explode</label>
               {loading ? (
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Loading entities...</p>
               ) : entities.length > 0 ? (
-                <select
-                  value={formData.selectedEntityIndex !== undefined ? formData.selectedEntityIndex : ''}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    handleChange('selectedEntityIndex', val);
-                  }}
-                >
-                  <option value="">-- Select an Entity --</option>
-                  {entities.map((ent, idx) => (
-                    <option key={idx} value={idx}>
-                      {getDisplayName(ent, idx)}
-                    </option>
-                  ))}
-                </select>
+                    <>
+                      <div style={{ position: 'relative', marginBottom: 8 }}>
+                        <Search size={12} style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', opacity: 0.4 }} />
+                        <input 
+                          placeholder="Search entities..."
+                          value={searchTerm}
+                          onChange={e => setSearchTerm(e.target.value)}
+                          style={{ width: '100%', padding: '4px 8px 4px 26px', background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 4, color: 'var(--text-primary)', fontSize: '0.65rem' }}
+                        />
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto', paddingRight: 4 }}>
+                        {entities
+                          .map((ent, idx) => ({ ent, idx, name: getDisplayName(ent, idx) }))
+                          .filter(item => item.name.toLowerCase().includes(searchTerm.toLowerCase()))
+                          .map(({ ent, idx, name }) => {
+                            const isSelected = String(formData.selectedEntityIndex) === String(idx);
+                            return (
+                              <div 
+                                key={idx} 
+                                onClick={() => handleChange('selectedEntityIndex', idx)}
+                                style={{ 
+                                  display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: '0.7rem', 
+                                  color: isSelected ? 'var(--cyan)' : 'var(--text-primary)', 
+                                  cursor: 'pointer', padding: '6px 10px', borderRadius: 6,
+                                  background: isSelected ? 'rgba(59, 130, 246, 0.08)' : 'var(--bg-surface)',
+                                  border: `1px solid ${isSelected ? 'var(--cyan)' : 'var(--border-subtle)'}`,
+                                  transition: 'all 0.15s ease'
+                                }}
+                              >
+                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: isSelected ? 600 : 400 }}>{name}</span>
+                                {isSelected && <CheckCircle2 size={14} color="var(--cyan)" style={{ flexShrink: 0 }} />}
+                              </div>
+                            );
+                        })}
+                      </div>
+                    </>
               ) : (
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                   Connect a data source to see available entities.
@@ -221,14 +196,9 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
             )}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0, letterSpacing: '0.05em' }}>Extracted Attributes Preview</p>
-              {neo4jKeys.length > 0 && (
-                <span style={{ fontSize: '0.55rem', padding: '2px 6px', background: 'rgba(52, 211, 153, 0.1)', color: 'var(--emerald)', borderRadius: 12, border: '1px solid var(--emerald)' }}>
-                  Neo4j Schema Live
-                </span>
-              )}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {(neo4jKeys.length > 0 ? neo4jKeys : Object.keys(selectedEntity || {})).map((k) => {
+              {Array.from(new Set(selectedEntity ? Object.keys(selectedEntity) : [])).map((k) => {
                 // Try to safely get the value from selectedEntity (even if it's nested or inside a stringified json)
                 let v = selectedEntity ? selectedEntity[k] : undefined;
                 if (v === undefined && k.includes('.') && selectedEntity) {
@@ -236,18 +206,15 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
                   let current = selectedEntity;
                   for (let p of parts) {
                     if (current === null || current === undefined) break;
-                    if (typeof current === 'string' && current.trim().startsWith('{')) {
-                      try { current = JSON.parse(current.replace(/'/g, '"').replace(/: None/g, ': null').replace(/: True/g, ': true').replace(/: False/g, ': false')); } catch (e) {}
-                    }
                     current = current[p];
                   }
                   if (current !== undefined) v = current;
                 }
 
                 return (
-                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '6px 8px', background: 'rgba(0,0,0,0.15)', borderRadius: 6, border: '1px solid var(--border-subtle)', fontSize: '0.6rem' }}>
-                    <span style={{ color: 'var(--cyan)', marginRight: 8, whiteSpace: 'nowrap', fontWeight: 600 }}>{k}</span>
-                    <span style={{ color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', textAlign: 'right', wordBreak: 'break-all' }}>
+                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '6px 10px', background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border-subtle)', fontSize: '0.65rem' }}>
+                    <span style={{ color: 'var(--accent-blue)', marginRight: 8, whiteSpace: 'nowrap', fontWeight: 600 }}>{k}</span>
+                    <span style={{ color: 'var(--text-secondary)', fontFamily: 'JetBrains Mono', textAlign: 'right', wordBreak: 'break-all' }}>
                       {v !== undefined ? (typeof v === 'object' ? JSON.stringify(v) : String(v)) : <span style={{ fontStyle: 'italic', opacity: 0.5 }}>null</span>}
                     </span>
                   </div>
@@ -264,7 +231,6 @@ export default memo(({ id, data, selected }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [selectedEntity, setSelectedEntity] = useState(null);
   const [selectedEntityName, setSelectedEntityName] = useState(null);
-  const [neo4jKeys, setNeo4jKeys] = useState([]);
   
   const edges = useEdges();
   const nodes = useNodes();
@@ -288,34 +254,20 @@ export default memo(({ id, data, selected }) => {
     const incomingEdges = edges.filter(e => e.target === id);
     const incomingNodes = incomingEdges.map(e => nodes.find(n => n.id === e.source)).filter(Boolean);
     
-    // Fetch Neo4j keys
-    let sourceId = null;
-    let sources = incomingNodes.filter(n => n.type === 'dataTrigger' && n.data?.id);
-    if (sources.length > 0) sourceId = sources[0].data.id;
-    else {
-      let extractNodes = incomingNodes.filter(n => n.type === 'extractEntities');
-      if (extractNodes.length > 0) {
-        const extNode = extractNodes[0];
-        const upEdges = edges.filter(e => e.target === extNode.id);
-        const upNodes = upEdges.map(e => nodes.find(n => n.id === e.source)).filter(Boolean);
-        const trig = upNodes.find(n => n.type === 'dataTrigger' && n.data?.id);
-        if (trig) sourceId = trig.data.id;
-      }
-    }
-
-    if (sourceId) {
-      getEntityKeys(sourceId).then(keys => setNeo4jKeys(keys)).catch(() => setNeo4jKeys([]));
-    }
-
-    const pinnedEdge = incomingEdges.find(e => e.sourceHandle && e.sourceHandle.startsWith('entity-out-pinned-'));
+    const specificEntityEdge = incomingEdges.find(e => e.sourceHandle && e.sourceHandle.startsWith('entity-out-'));
 
     if (incomingNodes.length > 0) {
       resolveUpstreamData(incomingNodes, nodes, edges).then(dataList => {
         let ent = null;
         let entName = null;
 
-        if (pinnedEdge) {
-          const pinnedName = pinnedEdge.sourceHandle.replace('entity-out-pinned-', '');
+        if (specificEntityEdge) {
+          let specificName = specificEntityEdge.sourceHandle;
+          if (specificName.startsWith('entity-out-pinned-')) {
+            specificName = specificName.replace('entity-out-pinned-', '');
+          } else if (specificName.startsWith('entity-out-')) {
+            specificName = specificName.replace('entity-out-', '');
+          }
           const extNode = incomingNodes.find(n => n.type === 'extractEntities');
           const propToUse = extNode?.data?.displayNameProperty || data.displayNameProperty;
 
@@ -326,9 +278,6 @@ export default memo(({ id, data, selected }) => {
               let current = e;
               for (let i = 0; i < parts.length; i++) {
                 if (current === null || current === undefined) break;
-                if (typeof current === 'string' && current.trim().startsWith('{')) {
-                  try { current = JSON.parse(current.replace(/'/g, '"')); } catch (err) {}
-                }
                 current = current[parts[i]];
               }
               if (current !== null && current !== undefined && typeof current !== 'object') {
@@ -336,9 +285,9 @@ export default memo(({ id, data, selected }) => {
               }
             }
             const name = customName || e.name || e.title || e.id || `Entity ${idx + 1}`;
-            return name === pinnedName;
+            return name === specificName;
           });
-          entName = pinnedName;
+          entName = specificName;
         } else if (data.selectedEntityIndex !== undefined && data.selectedEntityIndex !== '') {
           ent = dataList[data.selectedEntityIndex];
           if (ent) {
@@ -348,9 +297,6 @@ export default memo(({ id, data, selected }) => {
               let current = ent;
               for (let i = 0; i < parts.length; i++) {
                 if (current === null || current === undefined) break;
-                if (typeof current === 'string' && current.trim().startsWith('{')) {
-                  try { current = JSON.parse(current.replace(/'/g, '"')); } catch (err) {}
-                }
                 current = current[parts[i]];
               }
               if (current !== null && current !== undefined && typeof current !== 'object') {
@@ -384,21 +330,37 @@ export default memo(({ id, data, selected }) => {
       setIsExpanded={setIsExpanded}
       color={config.color}
       hideDefaultSource={true}
+      hideDefaultTarget={true}
     >
+      <Handle 
+        type="target" 
+        position={Position.Left} 
+        id="data" 
+        style={{ 
+          left: -6, 
+          top: '50%',
+          transform: 'translateY(-50%)',
+          background: 'var(--amber)', 
+          width: 12, 
+          height: 12, 
+          border: '2px solid var(--bg-surface)',
+          zIndex: 10
+        }} 
+      />
       <div style={{ marginTop: 12, borderTop: '1px solid var(--border-subtle)', paddingTop: 8, position: 'relative' }}>
         {(() => {
-          const keysToShow = neo4jKeys.length > 0 ? neo4jKeys : (selectedEntity ? Object.keys(selectedEntity) : []);
+          const keysToShow = selectedEntity ? Object.keys(selectedEntity) : [];
           
           if (keysToShow.length > 0) {
             return (
               <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                  {neo4jKeys.length > 0 ? <Database size={12} color="var(--emerald)" /> : <Layers size={12} color="var(--accent-blue)" />}
+                  <Layers size={12} color="var(--accent-blue)" />
                   <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', margin: 0 }}>
                     {selectedEntity ? (
                       <>Exploded: <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{selectedEntityName}</span></>
                     ) : (
-                      <>Schema: <span style={{ color: 'var(--emerald)', fontWeight: 600 }}>Neo4j Live</span></>
+                      <>Waiting for input data...</>
                     )}
                   </p>
                 </div>
@@ -414,12 +376,6 @@ export default memo(({ id, data, selected }) => {
                         let current = selectedEntity;
                         for (let p of parts) {
                           if (current === null || current === undefined) break;
-                          if (typeof current === 'string' && current.trim().startsWith('{')) {
-                            try { 
-                              const parsed = parsePythonLiteral(current);
-                              if (parsed) current = parsed;
-                            } catch (e) {}
-                          }
                           current = current[p];
                         }
                         if (current !== undefined) v = current;
@@ -433,13 +389,12 @@ export default memo(({ id, data, selected }) => {
                         padding: '4px 8px', 
                         borderRadius: 4, 
                         fontSize: '0.65rem',
-                        border: '1px solid',
-                        borderColor: neo4jKeys.includes(k) ? 'rgba(52, 211, 153, 0.3)' : 'var(--border-subtle)',
+                        border: '1px solid var(--border-subtle)',
                         display: 'flex',
                         alignItems: 'center',
                         gap: 6
                       }}>
-                        <div style={{ width: 6, height: 6, borderRadius: '50%', background: neo4jKeys.includes(k) ? 'var(--emerald)' : 'var(--cyan)' }} />
+                        <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--cyan)' }} />
                         <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{k}</span>
                         {selectedEntity && (
                           <span style={{ color: 'var(--text-muted)', marginLeft: 'auto', fontFamily: 'JetBrains Mono', fontSize: '0.55rem', maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -456,10 +411,11 @@ export default memo(({ id, data, selected }) => {
                             right: -6, 
                             top: '50%',
                             transform: 'translateY(-50%)',
-                            background: neo4jKeys.includes(k) ? 'var(--emerald)' : 'var(--cyan)', 
+                            background: 'var(--cyan)', 
                             width: 10, 
                             height: 10, 
-                            border: '2px solid var(--bg-surface)' 
+                    border: '2px solid var(--bg-surface)',
+                    zIndex: 10
                           }} 
                         />
                       </div>

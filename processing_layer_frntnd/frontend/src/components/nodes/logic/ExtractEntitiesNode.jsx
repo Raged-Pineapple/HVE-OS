@@ -1,7 +1,27 @@
-import React, { memo, useState, useEffect, useMemo } from 'react';
+import React, { memo, useState, useEffect, useMemo, useRef } from 'react';
 import { Handle, Position, useEdges } from 'reactflow';
-import { Fingerprint, Tags, Layers, Pin, PinOff } from 'lucide-react';
+import { Fingerprint, Tags, Layers, Pin, PinOff, Search } from 'lucide-react';
 import BaseNode from '../BaseNode';
+
+const getEntityName = (entity, displayProperty) => {
+  if (!displayProperty) {
+    return entity.name || entity.id || entity.title || 'Unknown';
+  }
+  
+  const parts = displayProperty.split('.');
+  let current = entity;
+  
+  for (const part of parts) {
+    if (current === null || current === undefined) break;
+    current = current[part];
+  }
+  
+  if (current !== null && current !== undefined && typeof current !== 'object') {
+    return String(current);
+  }
+  
+  return entity.name || entity.id || 'Unknown';
+};
 
 export const config = {
   type: 'extractEntities',
@@ -11,8 +31,42 @@ export const config = {
   color: '#3B82F6',
   hideInSidebar: false,
   SettingsForm: ({ nodeId, formData, handleChange, nodes, edges }) => {
+    const [searchTerm, setSearchTerm] = useState('');
+    const prevPropRef = useRef(formData.displayNameProperty);
+
+    useEffect(() => {
+      if (formData.displayNameProperty !== prevPropRef.current) {
+        const oldProp = prevPropRef.current;
+        const newProp = formData.displayNameProperty;
+        
+        if (formData.pinnedEntities && formData.pinnedEntities.length > 0 && formData.extracted) {
+           const newPinnedNames = formData.extracted
+              .filter(ent => formData.pinnedEntities.includes(getEntityName(ent, oldProp)))
+              .map(ent => getEntityName(ent, newProp));
+           
+           if (JSON.stringify(newPinnedNames) !== JSON.stringify(formData.pinnedEntities)) {
+             handleChange('pinnedEntities', newPinnedNames);
+           }
+        }
+        prevPropRef.current = newProp;
+      }
+    }, [formData.displayNameProperty, formData.extracted, formData.pinnedEntities, handleChange]);
+
     const incomingEdges = edges.filter(e => e.target === nodeId);
     const incomingNodes = incomingEdges.map(e => nodes.find(n => n.id === e.source)).filter(Boolean);
+
+    const availableKeys = new Set();
+    const sourceData = formData.extracted || formData.data || [];
+    sourceData.forEach(item => {
+      Object.keys(item).forEach(k => {
+        availableKeys.add(k);
+        let val = item[k];
+        if (val && typeof val === 'object' && !Array.isArray(val)) {
+          Object.keys(val).forEach(nk => availableKeys.add(`${k}.${nk}`));
+        }
+      });
+    });
+    const keyOptions = Array.from(availableKeys).sort();
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -62,6 +116,104 @@ export const config = {
           </div>
         )}
 
+        <div>
+          <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Display Name Property</label>
+          <select 
+            value={formData.displayNameProperty || ''}
+            onChange={(e) => {
+              handleChange('displayNameProperty', e.target.value);
+            }}
+            style={{ width: '100%', padding: '6px 8px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 6, color: 'var(--text-primary)', fontSize: '0.8rem' }}
+          >
+            <option value="">-- Default (name, id, title) --</option>
+            {keyOptions.map(k => (
+              <option key={k} value={k}>{k}</option>
+            ))}
+          </select>
+        </div>
+
+        {formData.extracted && formData.extracted.length > 0 && (
+          <div style={{ marginTop: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', margin: 0 }}>Pin Entities</label>
+              <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', display: 'flex', gap: 8 }}>
+                <span>{(formData.pinnedEntities || []).length} pinned</span>
+                {(formData.pinnedEntities || []).length > 0 && (
+                  <span 
+                    onClick={(e) => { e.preventDefault(); handleChange('pinnedEntities', []); }}
+                    style={{ color: 'var(--accent-blue)', cursor: 'pointer', fontWeight: 600 }}
+                  >
+                    Clear
+                  </span>
+                )}
+              </div>
+            </div>
+            
+            <div style={{ position: 'relative', marginBottom: 8 }}>
+              <Search size={12} style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', opacity: 0.4 }} />
+              <input 
+                placeholder="Search entities..."
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+                style={{ width: '100%', padding: '4px 8px 4px 26px', background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 4, color: 'var(--text-primary)', fontSize: '0.65rem' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, padding: '0 2px' }}>
+              <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                {formData.extracted.filter(e => getEntityName(e, formData.displayNameProperty).toLowerCase().includes(searchTerm.toLowerCase())).length} results
+              </span>
+              <div style={{ display: 'flex', gap: 10, fontSize: '0.6rem' }}>
+                <span onClick={(e) => { 
+                    e.preventDefault(); 
+                    const currentPinned = new Set(formData.pinnedEntities || []);
+                    formData.extracted.filter(ent => getEntityName(ent, formData.displayNameProperty).toLowerCase().includes(searchTerm.toLowerCase())).forEach(ent => currentPinned.add(getEntityName(ent, formData.displayNameProperty)));
+                    handleChange('pinnedEntities', Array.from(currentPinned));
+                  }} style={{ color: 'var(--cyan)', cursor: 'pointer', fontWeight: 600 }}>Pin All</span>
+                <span onClick={(e) => { 
+                    e.preventDefault(); 
+                    const currentPinned = new Set(formData.pinnedEntities || []);
+                    formData.extracted.filter(ent => getEntityName(ent, formData.displayNameProperty).toLowerCase().includes(searchTerm.toLowerCase())).forEach(ent => currentPinned.delete(getEntityName(ent, formData.displayNameProperty)));
+                    handleChange('pinnedEntities', Array.from(currentPinned));
+                  }} style={{ color: 'var(--text-muted)', cursor: 'pointer', fontWeight: 600 }}>Unpin All</span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto', paddingRight: 4 }}>
+              {formData.extracted
+                .filter(entity => getEntityName(entity, formData.displayNameProperty).toLowerCase().includes(searchTerm.toLowerCase()))
+                .map((entity, idx) => {
+                const name = getEntityName(entity, formData.displayNameProperty);
+                const isPinned = (formData.pinnedEntities || []).includes(name);
+                return (
+                  <div 
+                    key={`pin-${idx}-${name}`} 
+                    onClick={() => {
+                      const currentPinned = formData.pinnedEntities || [];
+                      if (isPinned) {
+                        handleChange('pinnedEntities', currentPinned.filter(n => n !== name));
+                      } else {
+                        handleChange('pinnedEntities', [...currentPinned, name]);
+                      }
+                    }}
+                    style={{ 
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: '0.7rem', 
+                      color: isPinned ? 'var(--cyan)' : 'var(--text-primary)', 
+                      cursor: 'pointer', padding: '6px 10px', borderRadius: 6,
+                      background: isPinned ? 'rgba(59, 130, 246, 0.08)' : 'var(--bg-surface)',
+                      border: `1px solid ${isPinned ? 'var(--cyan)' : 'var(--border-subtle)'}`,
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: isPinned ? 600 : 400 }}>{name}</span>
+                    {isPinned ? <Pin size={12} fill="var(--cyan)" color="var(--cyan)" style={{ flexShrink: 0 }} /> : <PinOff size={12} color="var(--text-muted)" style={{ flexShrink: 0, opacity: 0.5 }} />}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {incomingNodes.length > 0 && (
           <div style={{ padding: '8px', background: 'var(--bg-elevated)', borderRadius: 6, fontSize: '0.65rem' }}>
             <span style={{ color: 'var(--text-muted)' }}>Source: </span>
@@ -71,31 +223,6 @@ export const config = {
       </div>
     );
   }
-};
-
-const getEntityName = (entity, displayProperty) => {
-  if (!displayProperty) {
-    return entity.name || entity.id || entity.title || 'Unknown';
-  }
-  
-  const parts = displayProperty.split('.');
-  let current = entity;
-  
-  for (const part of parts) {
-    if (current === null || current === undefined) break;
-    if (typeof current === 'string' && current.trim().startsWith('{')) {
-      try {
-        current = JSON.parse(current);
-      } catch (e) {}
-    }
-    current = current[part];
-  }
-  
-  if (current !== null && current !== undefined && typeof current !== 'object') {
-    return String(current);
-  }
-  
-  return entity.name || entity.id || 'Unknown';
 };
 
 export default memo(({ data, selected }) => {
@@ -119,23 +246,6 @@ export default memo(({ data, selected }) => {
       
       if (outputs && outputs.data) {
         setInputData(outputs.data);
-        
-        if (outputs.data.length > 0 && extracted.length === 0) {
-          fetch('http://localhost:8000/api/v1/nodes/execute/extractEntities', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              inputs: { data: outputs.data }, 
-              config: { strategy: data.strategy || 'NER' } 
-            })
-          }).then(r => r.json()).then(result => {
-            if (result.success && result.outputs) {
-              window.dispatchEvent(new CustomEvent('node-output-updated', {
-                detail: { nodeId: data.id, outputs: result.outputs }
-              }));
-            }
-          }).catch(err => console.error('Auto-execute failed:', err));
-        }
       }
     };
     
@@ -213,7 +323,7 @@ export default memo(({ data, selected }) => {
                     <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: '0 0 4px 0' }}>
                       Pinned — {pinnedEntities.length} entities
                     </p>
-                    {pinnedEntities.slice(0, 3).map((entity, idx) => {
+                    {pinnedEntities.map((entity, idx) => {
                       const name = getEntityName(entity, data.displayNameProperty);
                       return (
                         <div key={`pinned-${idx}-${name}`} style={{ 
@@ -235,7 +345,7 @@ export default memo(({ data, selected }) => {
                             type="source" 
                             id={`entity-out-pinned-${name}`}
                             position={Position.Right} 
-                            style={{ right: -6, background: 'var(--cyan)', width: 10, height: 10, border: '2px solid var(--bg-surface)' }}
+                            style={{ right: -6, background: 'var(--cyan)', width: 10, height: 10, border: '2px solid var(--bg-surface)', zIndex: 10 }}
                           />
                         </div>
                       );
@@ -248,7 +358,7 @@ export default memo(({ data, selected }) => {
                     <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: '0 0 4px 0' }}>
                       Unpinned — {unpinned.length} entities
                     </p>
-                    {unpinned.slice(0, 5).map((entity, idx) => {
+                    {unpinned.slice(0, 10).map((entity, idx) => {
                       const name = getEntityName(entity, data.displayNameProperty);
                       return (
                         <div key={`unpinned-${idx}-${name}`} style={{ 
@@ -269,7 +379,7 @@ export default memo(({ data, selected }) => {
                             type="source" 
                             id={`entity-out-${name}`}
                             position={Position.Right} 
-                            style={{ right: -6, background: 'var(--cyan)', width: 10, height: 10, border: '2px solid var(--bg-surface)' }}
+                            style={{ right: -6, background: 'var(--cyan)', width: 10, height: 10, border: '2px solid var(--bg-surface)', zIndex: 10 }}
                           />
                         </div>
                       );

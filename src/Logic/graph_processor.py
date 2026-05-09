@@ -17,9 +17,9 @@ for _d in [_gateway_dir, _src_dir]:
     if _d not in sys.path:
         sys.path.insert(0, _d)
 
-from gateway.services import neo4j_service, kafka_service, db_service, query_service
-from gateway.services.kafka_service import SILVER_TOPIC
-from gateway.services.event_service import get_event_service
+from services import neo4j_service, kafka_service, db_service, query_service
+from services.kafka_service import SILVER_TOPIC
+from services.event_service import get_event_service
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
@@ -219,7 +219,7 @@ class GraphProcessor:
                     logger.debug(f"Event emit skipped: {e}")
                 # ── Wake up the Graph Executor ──
                 try:
-                    from gateway.routers.events import trigger_graph_execution
+                    from routers.events import trigger_graph_execution
                     trigger_graph_execution(source_id=source_id)
                 except Exception as e:
                     logger.debug(f"Graph trigger skipped: {e}")

@@ -3,11 +3,28 @@ source.py — Source Node
 Fetches all entities from a Neo4j source for use in downstream nodes.
 """
 import logging
+import json
+import ast
 from typing import Any, Dict
 from ..base import BaseNode, NodeMetadata, NodeResult
 from ..registry import register_node
 
 logger = logging.getLogger(__name__)
+
+def _deserialize_props(props: dict) -> dict:
+    """Parse stringified JSON/Python objects back into native dicts/lists."""
+    if not props:
+        return props
+    for k, v in list(props.items()):
+        if isinstance(v, str) and (v.strip().startswith('{') or v.strip().startswith('[')):
+            try:
+                props[k] = json.loads(v)
+            except Exception:
+                try:
+                    props[k] = ast.literal_eval(v)
+                except Exception:
+                    pass
+    return props
 
 
 @register_node
@@ -55,7 +72,7 @@ class SourceNode(BaseNode):
             )
 
         try:
-            from gateway.services.neo4j_service import get_neo4j_service
+            from services.neo4j_service import get_neo4j_service
             neo4j = get_neo4j_service()
 
             if not neo4j:
@@ -83,7 +100,7 @@ class SourceNode(BaseNode):
                     metadata={"source_id": source_id}
                 )
 
-            entities = [dict(r["entity"]) for r in results]
+            entities = [_deserialize_props(dict(r["entity"])) for r in results]
 
             all_keys = set()
             for entity in entities:

@@ -2,8 +2,7 @@ import React, { memo, useState, useEffect, useRef } from 'react';
 import { useEdges, useNodes, Handle, Position, useReactFlow } from 'reactflow';
 import { GitMerge, Plus, X, ChevronDown, ChevronRight, Zap, Search } from 'lucide-react';
 import BaseNode from '../BaseNode';
-import { getEntitiesByLabel, getEntityKeys } from '../../../api/client.js';
-import { attrKeyFromHandle, resolveAttrValue, parsePythonLiteral } from '../../../utils/pipelineUtils.js';
+import { attrKeyFromHandle, resolveAttrValue } from '../../../utils/pipelineUtils.js';
 
 export const config = {
   type: 'combine',
@@ -246,29 +245,14 @@ function checkCondition(value, condition) {
 }
 
 const fetchUpstreamEntities = async (srcNode, nodes, edges) => {
-  if (srcNode.type === 'dataTrigger' && srcNode.data?.id) {
-    return await getEntitiesByLabel(srcNode.data.id).catch(() => []);
+  if ((srcNode.type === 'dataTrigger' || srcNode.type === 'source') && (srcNode.data?.source_id || srcNode.data?.id)) {
+    if (srcNode.data?.data?.length > 0) {
+      return srcNode.data.data;
+    }
   }
   if (srcNode.type === 'extractEntities') {
-    const upEdges = edges.filter(e => e.target === srcNode.id);
-    const upNodes = upEdges.map(e => nodes.find(n => n.id === e.source)).filter(Boolean);
-    const trig = upNodes.find(n => n.type === 'dataTrigger' && n.data?.id);
-    if (trig) {
-      let dataList = await getEntitiesByLabel(trig.data.id).catch(() => []);
-      const strategy = srcNode.data?.strategy || 'NER';
-      const label = srcNode.data?.label || '';
-      if (strategy === 'KeyPath' && label) {
-        dataList = dataList.flatMap(item => {
-          const parts = label.split('.');
-          let current = item;
-          for (let p of parts) {
-            if (current === null || current === undefined) break;
-            current = current[p];
-          }
-          return Array.isArray(current) ? current : (current ? [current] : []);
-        });
-      }
-      return dataList;
+    if (srcNode.data?.extracted?.length > 0) {
+      return srcNode.data.extracted;
     }
   }
   return [];
@@ -381,28 +365,21 @@ export default memo(({ id, data, selected }) => {
 
         // Otherwise, it's a Data connection
         let value = null;
-        let neo4jKeys = [];
         let groupName = 'Attributes';
         const handle  = edge.sourceHandle || 'default';
           let attrKey = attrKeyFromHandle(handle);
 
-          // Fetch Neo4j Keys if possible
-          if (src.type === 'dataTrigger' && src.data?.id) {
-            neo4jKeys = await getEntityKeys(src.data.id).catch(() => []);
-          } else if (src.type === 'extractEntities') {
-            const upEdges = edges.filter(e => e.target === src.id);
-            const upNodes = upEdges.map(e => nodes.find(n => n.id === e.source)).filter(Boolean);
-            const trig = upNodes.find(n => n.type === 'dataTrigger' && n.data?.id);
-            if (trig) {
-              neo4jKeys = await getEntityKeys(trig.data.id).catch(() => []);
-            }
-          }
-
           // If the upstream is extractEntities and it's a pinned handle, fetch it exactly like Explode Attributes (SplitNode) does
-          if (src.type === 'extractEntities' && handle.startsWith('entity-out-pinned-')) {
-            const pinnedName = handle.replace('entity-out-pinned-', '');
-            attrKey = pinnedName;
-            groupName = pinnedName;
+          if (src.type === 'extractEntities' && handle.startsWith('entity-out-')) {
+            let specificName = handle;
+            if (specificName.startsWith('entity-out-pinned-')) {
+              specificName = specificName.replace('entity-out-pinned-', '');
+            } else {
+              specificName = specificName.replace('entity-out-', '');
+            }
+            
+            attrKey = specificName;
+            groupName = specificName;
             
             const dataList = await fetchUpstreamEntities(src, nodes, edges);
             const propToUse = src.data?.displayNameProperty;
@@ -414,9 +391,6 @@ export default memo(({ id, data, selected }) => {
                 let current = e;
                 for (let i = 0; i < parts.length; i++) {
                   if (current === null || current === undefined) break;
-                  if (typeof current === 'string' && current.trim().startsWith('{')) {
-                    try { current = JSON.parse(current.replace(/'/g, '"')); } catch (err) {}
-                  }
                   current = current[parts[i]];
                 }
                 if (current !== null && current !== undefined && typeof current !== 'object') {
@@ -424,7 +398,7 @@ export default memo(({ id, data, selected }) => {
                 }
               }
               const name = customName || e.name || e.title || e.id || `Entity ${idx + 1}`;
-              return name === pinnedName;
+              return name === specificName;
             });
             
             if (ent) value = ent;
@@ -436,25 +410,8 @@ export default memo(({ id, data, selected }) => {
             }
           }
           
-          // Auto-explode plain objects using Neo4j Keys if available (exactly like SplitNode)
-          if (neo4jKeys.length > 0 && value && typeof value === 'object' && !Array.isArray(value)) {
-             neo4jKeys.forEach(k => {
-                let v = value[k];
-                if (v === undefined && k.includes('.')) {
-                  const parts = k.split('.');
-                  let current = value;
-                  for (let p of parts) {
-                    if (current === null || current === undefined) break;
-                    if (typeof current === 'string' && current.trim().startsWith('{')) {
-                      try { current = JSON.parse(current.replace(/'/g, '"').replace(/: None/g, ': null').replace(/: True/g, ': true').replace(/: False/g, ': false')); } catch (e) {}
-                    }
-                    current = current[p];
-                  }
-                  if (current !== undefined) v = current;
-                }
-                rows.push({ handle, attrKey: k, value: v, rowKey: `${edge.id}-${k}`, groupName });
-             });
-          } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+          // Auto-explode plain objects
+          if (value && typeof value === 'object' && !Array.isArray(value)) {
             Object.entries(value).forEach(([k, v]) => {
               rows.push({ handle, attrKey: k, value: v, rowKey: `${edge.id}-${k}`, groupName });
             });
