@@ -118,6 +118,16 @@ CREATE TABLE IF NOT EXISTS processing_log (
 );
 
 -- ============================================================
+-- 8. Graph Blueprints: Cypher templates for Silver -> Gold
+-- ============================================================
+CREATE TABLE IF NOT EXISTS graph_blueprints (
+    source_id VARCHAR(255) PRIMARY KEY REFERENCES source_registry(source_id) ON DELETE CASCADE,
+    cypher_template TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================
 -- Seed data for testing
 -- ============================================================
 INSERT INTO source_registry (source_id, source_type, protocol, status, description) 

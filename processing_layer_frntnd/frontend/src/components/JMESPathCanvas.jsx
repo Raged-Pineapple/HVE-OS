@@ -273,12 +273,27 @@ export default function JMESPathCanvas({
   const generateTemplate = () => {
     if (!rawData) return "# No data available to generate template";
 
+    const generateSchemaDef = (keys, sampleObj) => {
+      let def = "# Declare your Iceberg schema here. The backend will read this variable.\n";
+      def += "table_schema = [\n";
+      if (keys.length === 0) {
+        def += `    {"target_field": "id", "data_type": "STRING", "is_primary_key": True}\n`;
+      } else {
+        keys.forEach((k, i) => {
+          const t = detectType(sampleObj[k]);
+          def += `    {"target_field": "${k}", "data_type": "${t}", "is_primary_key": ${i === 0 ? 'True' : 'False'}}${i < keys.length - 1 ? ',' : ''}\n`;
+        });
+      }
+      def += "]\n\n";
+      return def;
+    };
+
     if (Array.isArray(rawData) && rawData.length > 0) {
       const first = rawData[0];
       if (typeof first === 'object' && first !== null) {
         const keys = Object.keys(first).filter(k => typeof first[k] !== 'object' || first[k] === null).slice(0, 5);
         const mapping = keys.map(k => `        '${k}': item.get('${k}')`).join(',\n');
-        return `# Auto-generated template for root array\nfor item in payload:\n    rows.append({\n${mapping}\n    })`;
+        return `${generateSchemaDef(keys, first)}# Auto-generated template for root array\nfor item in payload:\n    rows.append({\n${mapping}\n    })`;
       }
     }
 
@@ -297,12 +312,12 @@ export default function JMESPathCanvas({
         const first = targetArray[0];
         const keys = Object.keys(first).filter(k => typeof first[k] !== 'object' || first[k] === null).slice(0, 5);
         const mapping = keys.map(k => `        '${k}': item.get('${k}')`).join(',\n');
-        return `# Auto-generated template for nested array '${targetArrayKey}'\nfor item in get('${targetArrayKey}') or []:\n    rows.append({\n${mapping}\n    })`;
+        return `${generateSchemaDef(keys, first)}# Auto-generated template for nested array '${targetArrayKey}'\nfor item in get('${targetArrayKey}') or []:\n    rows.append({\n${mapping}\n    })`;
       }
 
       const keys = Object.keys(rawData).filter(k => typeof rawData[k] !== 'object' || rawData[k] === null).slice(0, 8);
       const mapping = keys.map(k => `    '${k}': get('${k}')`).join(',\n');
-      return `# Auto-generated template for flat JSON\nrows.append({\n${mapping}\n})`;
+      return `${generateSchemaDef(keys, rawData)}# Auto-generated template for flat JSON\nrows.append({\n${mapping}\n})`;
     }
 
     return "# Could not generate a specific template for this payload format";
@@ -431,7 +446,8 @@ export default function JMESPathCanvas({
             </div>
 
             <div style={{ padding: '10px 16px', background: 'var(--bg-surface)', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>
-              Available: <code style={{ color: 'var(--amber)' }}>get(path)</code>, <code style={{ color: 'var(--amber)' }}>payload</code>, <code style={{ color: 'var(--amber)' }}>rows</code>, <code style={{ color: 'var(--amber)' }}>uuid</code>, <code style={{ color: 'var(--amber)' }}>json</code>, <code style={{ color: 'var(--amber)' }}>datetime</code>
+              Available: <code style={{ color: 'var(--amber)' }}>get(path)</code>, <code style={{ color: 'var(--amber)' }}>payload</code>, <code style={{ color: 'var(--amber)' }}>rows</code>, <code style={{ color: 'var(--amber)' }}>uuid</code>, <code style={{ color: 'var(--amber)' }}>json</code>, <code style={{ color: 'var(--amber)' }}>datetime</code><br/>
+              Define <code style={{ color: 'var(--cyan)' }}>table_schema = [...]</code> to map Data Types and Primary Keys dynamically.
             </div>
 
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>

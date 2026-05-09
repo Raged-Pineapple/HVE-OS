@@ -150,7 +150,18 @@ class DQRuleInfo(BaseModel):
     rule_logic: str
     action_on_fail: str
     severity: str
-    is_active: bool
+
+class SaveSnapshotRequest(BaseModel):
+    """Payload to save a manual snapshot from the UI."""
+    table_name: str
+    snapshot_name: str
+    records: List[Dict[str, Any]]
+    overwrite_path: Optional[str] = None
+
+class SnapshotDataRequest(BaseModel):
+    """Payload to fetch a manual snapshot's data."""
+    path: str
+    limit: int = 1000
 
 
 # ============================================================
@@ -183,7 +194,7 @@ class QueryResponse(BaseModel):
 
 class SilverTableInfo(BaseModel):
     """Information about a Silver table."""
-    model_config = {"protected_namespaces": ()}  # Suppress schema_json warning
+    # We changed schema_json to table_schema to prevent Pydantic shadow warnings
     
     table_name: str
     source_id: Optional[str]
@@ -191,7 +202,7 @@ class SilverTableInfo(BaseModel):
     row_count: int
     file_count: int
     total_size_bytes: int
-    schema_json: Optional[Dict[str, Any]]
+    table_schema: Optional[Dict[str, Any]]
     source_description: Optional[str]
     created_at: Optional[str]
     updated_at: Optional[str]

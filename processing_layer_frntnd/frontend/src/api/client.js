@@ -12,6 +12,7 @@ export const getHealth = () => api.get('/health').then(r => r.data);
 export const listSources   = () => api.get('/api/v1/sources').then(r => r.data);
 export const listSourcesWithStatus = () => api.get('/api/v1/sources/with-status').then(r => r.data);
 export const getSource     = (id) => api.get(`/api/v1/sources/${id}`).then(r => r.data);
+export const getApiConfig  = (id) => api.get(`/api/v1/sources/${id}/api-config`).then(r => r.data);
 export const deleteSource  = (id) => api.delete(`/api/v1/sources/${id}`);
 export const purgeData     = (id) => api.delete(`/api/v1/sources/${id}/data`).then(r => r.data);
 
@@ -51,6 +52,8 @@ export const getBlueprints  = (id) => api.get(`/api/v1/sources/${id}/blueprints`
 export const setBlueprints  = (id, bp) => api.post(`/api/v1/sources/${id}/blueprints`, bp).then(r => r.data);
 export const getMappingScript = (id) => api.get(`/api/v1/sources/${id}/mapping-script`).then(r => r.data);
 export const saveMappingScript = (id, script) => api.put(`/api/v1/sources/${id}/mapping-script`, { mapping_script: script }).then(r => r.data);
+export const saveGraphBlueprint = (id, blueprint) => api.post(`/api/v1/sources/${id}/graph-blueprints`, blueprint).then(r => r.data);
+export const syncGraph = (id) => api.post(`/api/v1/sources/${id}/sync-graph`).then(r => r.data);
 
 // ── DQ Rules ─────────────────────────────────────────
 export const getDQRules = (id) => api.get(`/api/v1/sources/${id}/dq-rules`).then(r => r.data);
@@ -59,6 +62,12 @@ export const addDQRule  = (id, rule) => api.post(`/api/v1/sources/${id}/dq-rules
 // ── Silver / Query ────────────────────────────────────
 export const listSilverTables = () => api.get('/api/v1/silver/tables').then(r => r.data);
 export const runQuery = (sql) => api.post('/api/v1/query', { sql }).then(r => r.data);
+export const executeTimeTravelQuery = (sql, snapshotId) => api.post('/api/v1/query/time-travel', { sql, snapshot_id: snapshotId }).then(r => r.data);
+export const getTableSnapshots = (tableName) => api.get(`/api/v1/iceberg/${tableName}/snapshots`).then(r => r.data);
+export const saveSnapshot = (tableName, snapshotName, records, overwritePath = null) => api.post('/api/v1/query/save-snapshot', { table_name: tableName, snapshot_name: snapshotName, records, overwrite_path: overwritePath }).then(r => r.data);
+export const listManualSnapshots = () => api.get('/api/v1/query/manual-snapshots').then(r => r.data);
+export const getManualSnapshotData = (path, limit = 1000) => api.post('/api/v1/query/manual-snapshot-data', { path, limit }).then(r => r.data);
+export const deleteManualSnapshot = (path) => api.delete('/api/v1/query/manual-snapshot', { params: { path } }).then(r => r.data);
 
 // ── Neo4j Graph ──────────────────────────────────────
 export const getEntitiesByLabel = (sourceId) => api.get(`/api/v1/graph/entities/label/${sourceId}`).then(r => r.data);
@@ -67,5 +76,9 @@ export const getEntityKeys = (sourceId) => api.get(`/api/v1/graph/entities/keys/
 export const getEntityPreview = (sourceId, prop) => api.get(`/api/v1/graph/entities/preview/${sourceId}`, { params: { prop } }).then(r => r.data);
 export const discoverSecurityProviders = () => api.get('/api/v1/security/discovery').then(r => r.data);
 
-
-
+// ── Node Functions ─────────────────────────────────────
+export const listNodeTypes = () => api.get('/api/v1/nodes/types').then(r => r.data);
+export const executeNode = (nodeType, inputs, config) =>
+  api.post(`/api/v1/nodes/execute/${nodeType}`, { inputs, config }).then(r => r.data);
+export const executeGraph = (nodes, edges) =>
+  api.post('/api/v1/nodes/graph/execute', { nodes, edges }).then(r => r.data);

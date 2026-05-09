@@ -126,6 +126,37 @@ class Neo4jService:
         except Exception as e:
             logger.error(f"Failed to upsert Neo4j entity with {m_key}={m_val}: {e}")
 
+    def delete_source_nodes(self, source_id: str):
+        """Removes a source node and all entities associated with it using batched transactions."""
+        if not Neo4jService._driver:
+            return
+            
+        # We delete in batches to avoid transaction log overflow
+        # 1. Delete the entities linked to this source
+        query_entities = """
+        MATCH (s:Source {source_id: $source_id})
+        OPTIONAL MATCH (n)-[:PART_OF_SOURCE]->(s)
+        CALL {
+            WITH n
+            DETACH DELETE n
+        } IN TRANSACTIONS OF 10000 ROWS;
+        """
+        
+        # 2. Delete the source node itself
+        query_source = """
+        MATCH (s:Source {source_id: $source_id})
+        DETACH DELETE s
+        """
+        
+        try:
+            # Must use auto-commit (implicit) transaction for 'CALL {} IN TRANSACTIONS'
+            with Neo4jService._driver.session() as session:
+                session.run(query_entities, {"source_id": source_id}).consume()
+                session.run(query_source, {"source_id": source_id}).consume()
+            logger.info(f"Successfully purged source '{source_id}' and all entities from Neo4j.")
+        except Exception as e:
+            logger.error(f"Failed to delete Neo4j source nodes for {source_id}: {e}")
+
     def wipe_graph(self):
         """NUCLEAR: Deletes all nodes and relationships."""
         if not Neo4jService._driver:

@@ -235,7 +235,7 @@ def get_table_info() -> list:
                 "row_count": t.get("row_count", 0),
                 "file_count": t.get("file_count", 0),
                 "total_size_bytes": t.get("total_size_bytes", 0),
-                "schema_json": t.get("schema_json"),
+                "table_schema": t.get("schema_json"),
                 "source_description": t.get("source_description"),
                 "created_at": str(t["created_at"]) if t.get("created_at") else None,
                 "updated_at": str(t["updated_at"]) if t.get("updated_at") else None,

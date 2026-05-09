@@ -5,7 +5,7 @@ import CurlTerminal from './CurlTerminal.jsx';
 export default function BottomPanel() {
   const [open, setOpen] = useState(false);
   const [height, setHeight] = useState(260);
-  const [tab, setTab] = useState('log'); // 'log' | 'curl'
+  const [tab, setTab] = useState('log'); // 'log' | 'curl' | 'neo4j'
   const [logCount, setLogCount] = useState(0);
 
   // Resize drag
@@ -67,6 +67,7 @@ export default function BottomPanel() {
       }}>
         <TabBtn id="log"  label="SYSTEM LOG" badge={logCount > 0 ? logCount : null} />
         <TabBtn id="curl" label="CURL" />
+        <TabBtn id="neo4j" label="NEO4J BROWSER" />
         <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => setOpen(o => !o)} />
         <button
           onClick={() => setOpen(o => !o)}
@@ -84,6 +85,7 @@ export default function BottomPanel() {
             <LogTerminal onCountChange={setLogCount} inPanel />
           </div>
           {tab === 'curl' && <CurlTerminal />}
+          {tab === 'neo4j' && <iframe src="http://localhost:7474" style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }} title="Neo4j Browser" />}
         </div>
       )}
     </div>

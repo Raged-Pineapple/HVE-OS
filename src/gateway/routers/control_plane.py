@@ -8,7 +8,8 @@ from models import (
     SourceRegistration, SourceInfo, 
     MappingBlueprintCreate, MappingBlueprintInfo,
     DQRuleCreate, DQRuleInfo,
-    APISourceConfig
+    APISourceConfig,
+    GraphBlueprintCreate, GraphBlueprintInfo
 )
 from services import db_service
 from processors.api_poller import get_poller
@@ -99,6 +100,20 @@ async def get_source(source_id: str):
         if result.get(key):
             result[key] = str(result[key])
     return result
+
+
+@router.get("/{source_id}/api-config")
+async def get_api_config(source_id: str):
+    """Get the API polling configuration for a source."""
+    cfg = db_service.get_api_config(source_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail=f"No API config found for source '{source_id}'")
+    
+    # Convert datetime for serialization
+    for key in ['last_polled_at', 'created_at', 'updated_at']:
+        if cfg.get(key):
+            cfg[key] = str(cfg[key])
+    return cfg
 
 
 @router.delete("/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -237,6 +252,65 @@ async def save_mapping_script(source_id: str, body: dict):
     db_service.save_mapping_script(source_id, script)
     return {"source_id": source_id, "mapping_script": script, "status": "saved"}
 
+
+# ============================================================
+# GRAPH BLUEPRINTS (Silver -> Gold)
+# ============================================================
+
+@router.post("/{source_id}/graph-blueprints", response_model=GraphBlueprintInfo, status_code=status.HTTP_201_CREATED)
+async def save_graph_blueprint(source_id: str, blueprint: GraphBlueprintCreate):
+    """Save the Cypher entity mapping blueprint for Silver -> Gold."""
+    source = db_service.get_source(source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found. Register it first.")
+    
+    try:
+        with db_service.get_cursor() as cur:
+            cur.execute("""
+                INSERT INTO graph_blueprints (source_id, cypher_template) 
+                VALUES (%s, %s)
+                ON CONFLICT (source_id) DO UPDATE 
+                SET cypher_template = EXCLUDED.cypher_template,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING source_id, cypher_template, created_at, updated_at
+            """, (source_id, blueprint.cypher_template))
+            row = cur.fetchone()
+            
+        # Invalidate the background GraphProcessor cache immediately
+        try:
+            from Logic.graph_processor import get_graph_processor
+            processor = get_graph_processor()
+            if source_id in processor._blueprint_cache:
+                del processor._blueprint_cache[source_id]
+        except Exception:
+            pass
+            
+        return {
+            "source_id": row["source_id"],
+            "cypher_template": row["cypher_template"],
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"])
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{source_id}/sync-graph")
+async def sync_graph(source_id: str):
+    """Manually trigger a batch sync of all Silver Iceberg data to Neo4j."""
+    source = db_service.get_source(source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found. Register it first.")
+        
+    try:
+        from Logic.graph_processor import get_graph_processor
+        import asyncio
+        processor = get_graph_processor()
+        # Fire in background so the UI doesn't freeze
+        asyncio.create_task(asyncio.to_thread(processor.sync_table_to_graph, source_id))
+        return {"status": "Syncing", "message": f"Background graph sync started for {source_id}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================
 # DATA QUALITY RULES

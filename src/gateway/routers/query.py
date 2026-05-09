@@ -4,8 +4,11 @@ Enables SQL queries against clean Parquet tables in MinIO.
 """
 from fastapi import APIRouter, HTTPException
 from typing import List
-from models import QueryRequest, QueryResponse, SilverTableInfo, TimeTravelQueryRequest, SnapshotInfo
-from services import query_service, iceberg_service
+from models import QueryRequest, QueryResponse, SilverTableInfo, TimeTravelQueryRequest, SnapshotInfo, SaveSnapshotRequest
+from services import query_service, iceberg_service, minio_service
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["Query Engine"])
 
@@ -97,6 +100,7 @@ async def list_table_snapshots(table_name: str):
             ))
         return result
     except Exception as e:
+        logger.error(f"Error fetching snapshots for {table_name}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -130,3 +134,83 @@ async def execute_time_travel_query(request: TimeTravelQueryRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Time travel query error: {str(e)}")
+
+@router.post("/query/save-snapshot")
+async def save_manual_snapshot(request: SaveSnapshotRequest):
+    """
+    **Save Manual Snapshot to MinIO**
+    Saves a user-modified dataset from the CSV Editor as a new JSONL file in MinIO
+    flagged as a custom snapshot.
+    """
+    try:
+        if not request.records:
+            raise ValueError("No records provided to save.")
+            
+        if request.overwrite_path:
+            path = minio_service.update_custom_snapshot(request.overwrite_path, request.records)
+            msg = "Snapshot updated successfully"
+        else:
+            path = minio_service.write_custom_snapshot(request.table_name, request.snapshot_name, request.records)
+            msg = "Snapshot saved successfully"
+            
+        return {"status": "success", "message": msg, "path": path}
+    except ValueError as e:
+        logger.error(f"Value error in save_manual_snapshot: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to save manual snapshot: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/query/manual-snapshots")
+async def get_manual_snapshots():
+    """
+    **List Manual Custom Snapshots**
+    Returns a list of all user-saved JSONL snapshots from the Silver layer.
+    """
+    try:
+        snaps = minio_service.list_custom_snapshots()
+        return snaps
+    except Exception as e:
+        logger.error(f"Failed to list manual snapshots: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+from models import SnapshotDataRequest
+import json
+
+@router.post("/query/manual-snapshot-data", response_model=QueryResponse)
+async def get_manual_snapshot_data(request: SnapshotDataRequest):
+    """
+    **Fetch Data from a Manual Custom Snapshot**
+    Reads the JSONL file directly from MinIO and returns it as a QueryResponse.
+    """
+    try:
+        data = minio_service.read_object(minio_service.SILVER_BUCKET, request.path)
+        content = data.decode("utf-8")
+        rows = []
+        for line in content.splitlines():
+            if line.strip():
+                rows.append(json.loads(line))
+                if len(rows) >= request.limit:
+                    break
+        return {
+            "columns": list(rows[0].keys()) if rows else [],
+            "rows": rows,
+            "row_count": len(rows),
+            "execution_time_ms": 0
+        }
+    except Exception as e:
+        logger.error(f"Failed to read manual snapshot: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/query/manual-snapshot")
+async def delete_manual_snapshot(path: str):
+    """
+    **Delete a Manual Custom Snapshot**
+    Deletes the JSONL file from MinIO.
+    """
+    try:
+        minio_service.delete_custom_snapshot(path)
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to delete manual snapshot: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))

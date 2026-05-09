@@ -15,7 +15,7 @@ _src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _src_dir not in sys.path:
     sys.path.insert(0, _src_dir)
 
-from routers import ingest, control_plane, query, debug, graph, log_stream, security
+from routers import ingest, control_plane, query, debug, graph, log_stream, security, nodes, events
 from routers.log_stream import attach_handler
 
 # Setup logging
@@ -94,7 +94,16 @@ async def lifespan(app: FastAPI):
     logger.info("    GET  /api/v1/sources               → List data sources")
     logger.info("    POST /api/v1/query                 → SQL query Silver tables")
     logger.info("    GET  /api/v1/silver/tables          → List Silver tables")
+    logger.info("    GET  /api/v1/stream                 → SSE Stream")
+    logger.info("    POST /api/v1/stream/graph           → Register graph")
     logger.info("=" * 60)
+
+    # Start continuous executor
+    try:
+        events.start_executor()
+        logger.info("[✓] Continuous Graph Executor started")
+    except Exception as e:
+        logger.warning(f"[!] Continuous executor: {e}")
 
     yield  # Application runs here
 
@@ -173,6 +182,8 @@ app.include_router(query.router)
 app.include_router(debug.router)
 app.include_router(log_stream.router)
 app.include_router(security.router)
+app.include_router(nodes.router)
+app.include_router(events.router)
 
 # Create a dedicated sub-application for the Graph Control Plane
 graph_app = FastAPI(
@@ -221,4 +232,4 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True, ws="websockets")

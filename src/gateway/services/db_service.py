@@ -97,7 +97,24 @@ def ensure_graph_tables():
             ALTER TABLE source_registry 
             ADD COLUMN IF NOT EXISTS mapping_script TEXT DEFAULT NULL
         """)
-        logger.info("Checked/Created Stage 5 Gold Graph tables + mapping_script column.")
+        # iceberg_snapshot_log
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS iceberg_snapshot_log (
+                log_id SERIAL PRIMARY KEY,
+                table_name VARCHAR(255) NOT NULL,
+                source_id VARCHAR(255),
+                snapshot_id BIGINT NOT NULL,
+                operation VARCHAR(50),
+                records_added INT,
+                committed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # Migration: add committed_at if missing from old schema
+        cur.execute("""
+            ALTER TABLE iceberg_snapshot_log
+            ADD COLUMN IF NOT EXISTS committed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        """)
+        logger.info("Checked/Created Stage 5 Gold Graph tables + mapping_script column + iceberg log.")
 
 # ============================================================
 # SOURCE REGISTRY CRUD
@@ -164,11 +181,18 @@ def delete_source(source_id: str) -> bool:
     except Exception as e:
         logger.warning(f"Could not drop Iceberg table for {source_id}: {e}")
 
+    # 2. Drop Neo4j nodes (Knowledge Graph)
+    try:
+        from services import neo4j_service
+        neo4j_service.get_neo4j_service().delete_source_nodes(source_id)
+    except Exception as e:
+        logger.warning(f"Could not delete Neo4j nodes for {source_id}: {e}")
+
     with get_cursor() as cur:
-        # 2. Clean up from Silver Registry (matching by ID or Name)
+        # 3. Clean up from Silver Registry (matching by ID or Name)
         cur.execute("DELETE FROM silver_registry WHERE source_id = %s OR table_name = %s", (source_id, source_id))
 
-        # 3. Delete the primary source record (cascades to blueprints/rules via DB foreign keys)
+        # 4. Delete the primary source record (cascades to blueprints/rules via DB foreign keys)
         cur.execute("DELETE FROM source_registry WHERE source_id = %s", (source_id,))
         return cur.rowcount > 0
 

@@ -278,3 +278,107 @@ def peek_latest_objects(bucket: str, source_id: str, limit: int = 5) -> list:
     except Exception as e:
         logger.error(f"Failed to peek {bucket} for {source_id}: {e}")
         return []
+
+# ============================================================
+# CUSTOM USER SNAPSHOTS
+# ============================================================
+
+def write_custom_snapshot(table_name: str, snapshot_name: str, records: list) -> str:
+    """
+    Save a user-edited array of records as a manual snapshot.
+    """
+    now = datetime.utcnow()
+    # Sanitize the name for MinIO
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in snapshot_name)
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
+    object_path = f"custom_snapshots/{table_name}/{timestamp}_{safe_name}.jsonl"
+    
+    lines = [json.dumps(record) + "\n" for record in records]
+    content = "".join(lines).encode("utf-8")
+    data = io.BytesIO(content)
+    
+    try:
+        minio_client.put_object(
+            SILVER_BUCKET,
+            object_path,
+            data,
+            length=len(content),
+            content_type="application/jsonlines",
+            metadata={"is_manual_snapshot": "true"}
+        )
+        logger.info(f"Custom snapshot saved: {SILVER_BUCKET}/{object_path} ({len(records)} records)")
+        return f"{SILVER_BUCKET}/{object_path}"
+    except S3Error as e:
+        logger.error(f"Failed to save custom snapshot to MinIO: {e}")
+        raise
+
+def list_custom_snapshots() -> list:
+    """
+    List all manual custom snapshots across all tables.
+    Returns: [{"table_name": "...", "snapshot_name": "...", "path": "...", "timestamp": ...}]
+    """
+    try:
+        objects = minio_client.list_objects(SILVER_BUCKET, prefix="custom_snapshots/", recursive=True)
+        results = []
+        for obj in objects:
+            if not obj.object_name.endswith(".jsonl"):
+                continue
+            # Path structure: custom_snapshots/{table_name}/{timestamp}_{snapshot_name}.jsonl
+            parts = obj.object_name.split("/")
+            if len(parts) >= 3:
+                table_name = parts[1]
+                filename = parts[2].replace(".jsonl", "")
+                
+                # Try to extract the friendly name after the timestamp
+                if "_" in filename:
+                    snapshot_name = filename.split("_", 2)[-1]
+                else:
+                    snapshot_name = filename
+                    
+                results.append({
+                    "table_name": table_name,
+                    "snapshot_name": snapshot_name,
+                    "path": obj.object_name,
+                    "last_modified": str(obj.last_modified)
+                })
+        return results
+    except S3Error as e:
+        logger.error(f"Failed to list custom snapshots: {e}")
+        return []
+
+def update_custom_snapshot(object_path: str, data_rows: list):
+    """
+    Overwrites an existing custom manual snapshot in MinIO.
+    """
+    try:
+        if not object_path.startswith("custom_snapshots/"):
+            raise ValueError("Invalid path for custom snapshot update")
+        jsonl_data = ""
+        for row in data_rows:
+            jsonl_data += json.dumps(row) + "\n"
+        data_bytes = jsonl_data.encode("utf-8")
+        minio_client.put_object(
+            SILVER_BUCKET,
+            object_path,
+            data=io.BytesIO(data_bytes),
+            length=len(data_bytes),
+            content_type="application/jsonlines"
+        )
+        logger.info(f"Updated custom snapshot: {SILVER_BUCKET}/{object_path}")
+        return object_path
+    except Exception as e:
+        logger.error(f"Failed to update custom snapshot {object_path}: {e}")
+        raise
+
+def delete_custom_snapshot(object_path: str):
+    """
+    Delete a specific manual custom snapshot.
+    """
+    try:
+        if not object_path.startswith("custom_snapshots/"):
+            raise ValueError("Invalid path for custom snapshot deletion")
+        minio_client.remove_object(SILVER_BUCKET, object_path)
+        logger.info(f"Deleted custom snapshot: {SILVER_BUCKET}/{object_path}")
+    except S3Error as e:
+        logger.error(f"Failed to delete custom snapshot {object_path}: {e}")
+        raise

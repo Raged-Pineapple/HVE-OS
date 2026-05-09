@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Database, Brain, Filter, Zap, ChevronLeft, ChevronRight, Activity, Sigma } from 'lucide-react';
-import { listGraphSources, getEntitiesByLabel, listSilverTables } from '../api/client.js';
+import { Database, Brain, Filter, Zap, ChevronLeft, ChevronRight, Activity, Sigma, RefreshCw, FileJson, Trash2 } from 'lucide-react';
+import { listGraphSources, getEntitiesByLabel, listSilverTables, getTableSnapshots, listManualSnapshots, deleteManualSnapshot } from '../api/client.js';
 import { getNodesByCategory } from './nodes/registry.js';
 
 const ImportsList = ({ onDragStart }) => {
@@ -58,7 +58,7 @@ const ImportsList = ({ onDragStart }) => {
                             transition: 'all 0.2s ease'
                         }}
                         onClick={() => toggleExpand(s.source_id)}
-                        onDragStart={(e) => onDragStart(e, 'dataTrigger', s.source_id)}
+                        onDragStart={(e) => onDragStart(e, 'source', s.source_id)}
                         draggable
                     >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -119,21 +119,72 @@ const ImportsList = ({ onDragStart }) => {
 };
 
 
-export default function Sidebar() {
+export default function Sidebar({ onInjectNode }) {
     const [isOpen, setIsOpen] = useState(true);
     const [view, setView] = useState('nodes');
     const [silverTables, setSilverTables] = useState([]);
     const [loadingTables, setLoadingTables] = useState(false);
+    const [expandedTable, setExpandedTable] = useState(null);
+    const [tableSnapshots, setTableSnapshots] = useState({});
+    const [loadingSnapshots, setLoadingSnapshots] = useState({});
+    const [manualSnapshots, setManualSnapshots] = useState({});
+    const [selectedDatabaseSource, setSelectedDatabaseSource] = useState("");
+
+    const fetchAllSnapshots = async (tables) => {
+        setLoadingTables(true);
+        const snaps = {};
+        const mSnaps = {};
+        try {
+            await Promise.all(tables.map(async (t) => {
+                try {
+                    const res = await getTableSnapshots(t.table_name);
+                    if (res && res.length > 0) snaps[t.table_name] = res;
+                } catch (e) {}
+            }));
+            try {
+                const manual = await listManualSnapshots();
+                manual.forEach(m => {
+                    if (!mSnaps[m.table_name]) mSnaps[m.table_name] = [];
+                    mSnaps[m.table_name].push(m);
+                });
+            } catch(e) {}
+            setTableSnapshots(snaps);
+            setManualSnapshots(mSnaps);
+        } finally {
+            setLoadingTables(false);
+        }
+    };
 
     useEffect(() => {
-        if (view === 'database' && silverTables.length === 0) {
-            setLoadingTables(true);
+        if (silverTables.length === 0) {
             listSilverTables()
-                .then(setSilverTables)
-                .catch(console.error)
-                .finally(() => setLoadingTables(false));
+                .then(async (tables) => {
+                    setSilverTables(tables);
+                    await fetchAllSnapshots(tables);
+                })
+                .catch(console.error);
         }
-    }, [view, silverTables.length]);
+    }, [silverTables.length]);
+
+    const toggleTableExpand = async (tableName) => {
+        if (expandedTable === tableName) {
+            setExpandedTable(null);
+            return;
+        }
+        setExpandedTable(tableName);
+        // Snaps already fetched globally, no need to re-fetch unless missing
+        if (!tableSnapshots[tableName]) {
+            setLoadingSnapshots(prev => ({ ...prev, [tableName]: true }));
+            try {
+                const snaps = await getTableSnapshots(tableName);
+                setTableSnapshots(prev => ({ ...prev, [tableName]: snaps }));
+            } catch (e) {
+                console.error("Failed to fetch snapshots", e);
+            } finally {
+                setLoadingSnapshots(prev => ({ ...prev, [tableName]: false }));
+            }
+        }
+    };
 
     const onDragStart = (event, nodeType, sourceId) => {
         event.dataTransfer.setData('application/reactflow', nodeType);
@@ -281,30 +332,120 @@ export default function Sidebar() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                     {loadingTables && <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Loading tables...</p>}
                     {!loadingTables && silverTables.length === 0 && <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>No tables found.</p>}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        {silverTables.map((table, idx) => (
-                            <div 
-                                key={idx}
-                                className="card" 
-                                onDragStart={(e) => onDragStart(e, 'silverTable', table.table_name)} 
-                                draggable 
-                                style={{ 
-                                    padding: '10px 12px', 
-                                    cursor: 'grab', 
-                                    background: 'var(--glass-bg)', 
-                                    borderColor: 'var(--border-default)',
-                                    transition: 'all 0.2s ease',
-                                    marginBottom: 6
-                                }}
+
+
+                    {/* Source Selection Dropdown */}
+                    <div style={{ flexShrink: 0 }}>
+                        <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                            Add Source to Canvas
+                        </p>
+                        <select 
+                            style={{ 
+                                width: '100%', 
+                                padding: '8px 10px', 
+                                borderRadius: 6, 
+                                background: 'var(--bg-elevated)', 
+                                border: '1px solid var(--cyan)', 
+                                color: 'var(--text-primary)', 
+                                fontSize: '0.75rem', 
+                                cursor: 'pointer',
+                                boxShadow: '0 0 10px rgba(34, 211, 238, 0.1)'
+                            }}
+                            value=""
+                            onChange={(e) => {
+                                if (e.target.value && onInjectNode) {
+                                    onInjectNode('silverTable', e.target.value);
+                                }
+                            }}
+                        >
+                            <option value="" disabled>Select a Source...</option>
+                            {silverTables.map((t, i) => (
+                                <option key={i} value={t.table_name}>{t.table_name}</option>
+                            ))}
+                        </select>
+                    </div>
+
+
+
+                    {/* Manual Snapshots List */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                            <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                Saved Manual Snapshots
+                            </p>
+                            <button 
+                                onClick={() => fetchAllSnapshots(silverTables)}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--cyan)', opacity: 0.8, padding: 0 }}
+                                title="Refresh Snapshots"
                             >
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                                        <Database size={14} color="var(--accent-orange)" />
-                                        <p style={{ fontWeight: 600, fontSize: '0.8rem', margin: 0, wordBreak: 'break-all' }}>{table.table_name}</p>
+                                <RefreshCw size={12} />
+                            </button>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: '350px', overflowY: 'auto' }}>
+                            {Object.entries(manualSnapshots).map(([tableName, snaps]) => {
+                                if (!snaps || snaps.length === 0) return null;
+                                return (
+                                    <div key={tableName} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                        <p style={{ margin: '4px 0 0 0', fontSize: '0.65rem', color: 'var(--accent-teal)', fontWeight: 600 }}>{tableName}</p>
+                                        {snaps.map((snap, sIdx) => (
+                                            <div 
+                                                key={sIdx} 
+                                                className="card"
+                                                draggable
+                                                onDragStart={(e) => onDragStart(e, 'silverTable', `${tableName}::manual::${snap.path}::${snap.snapshot_name}`)}
+                                                onClick={() => onInjectNode && onInjectNode('silverTable', `${tableName}::manual::${snap.path}::${snap.snapshot_name}`)}
+                                                style={{ 
+                                                    padding: '10px 12px', 
+                                                    background: 'var(--glass-bg)', 
+                                                    border: '1px solid var(--border-default)',
+                                                    borderRadius: 8,
+                                                    display: 'flex',
+                                                    justifyContent: 'space-between',
+                                                    alignItems: 'center',
+                                                    fontSize: '0.8rem',
+                                                    cursor: 'grab',
+                                                    transition: 'all 0.2s ease',
+                                                    marginBottom: 6
+                                                }}
+                                                onMouseOver={(e) => e.currentTarget.style.borderColor = 'var(--accent-teal)'}
+                                                onMouseOut={(e) => e.currentTarget.style.borderColor = 'var(--border-default)'}
+                                                title={`Drag or Click to add Manual Snapshot: ${snap.snapshot_name}`}
+                                            >
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                    <FileJson size={14} color="var(--accent-teal)" />
+                                                    <div>
+                                                        <p style={{ margin: 0, fontWeight: 600 }}>{snap.snapshot_name}</p>
+                                                        <p style={{ margin: 0, fontSize: '0.65rem', color: 'var(--text-muted)' }}>{new Date(parseInt(snap.last_modified)).toLocaleString()}</p>
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        if (window.confirm(`Delete snapshot "${snap.snapshot_name}"?`)) {
+                                                            deleteManualSnapshot(snap.path)
+                                                                .then(() => fetchAllSnapshots(silverTables))
+                                                                .catch(err => alert("Failed to delete: " + err));
+                                                        }
+                                                    }}
+                                                    style={{ 
+                                                        background: 'none', border: 'none', cursor: 'pointer', 
+                                                        color: 'var(--accent-red)', opacity: 0.6, padding: '4px' 
+                                                    }}
+                                                    title="Delete Snapshot"
+                                                    onMouseOver={e => e.currentTarget.style.opacity = 1}
+                                                    onMouseOut={e => e.currentTarget.style.opacity = 0.6}
+                                                >
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            </div>
+                                        ))}
                                     </div>
-                                </div>
-                            </div>
-                        ))}
+                                );
+                            })}
+                            {Object.keys(manualSnapshots).length === 0 && (
+                                <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.7rem', padding: '8px', background: 'rgba(0,0,0,0.2)', borderRadius: '6px' }}>No manual snapshots saved yet.</p>
+                            )}
+                        </div>
                     </div>
                 </div>
             ) : (
@@ -339,6 +480,7 @@ export default function Sidebar() {
                     </div>
                 </div>
             )}
+
         </aside>
     );
 };

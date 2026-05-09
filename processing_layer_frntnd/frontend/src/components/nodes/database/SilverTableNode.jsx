@@ -1,17 +1,17 @@
 import React, { memo, useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Database, Play, AlertCircle, TableProperties, Maximize2, X, Download } from 'lucide-react';
+import { Database, Play, AlertCircle, TableProperties, Maximize2, X, Download, Save } from 'lucide-react';
 import { HotTable } from '@handsontable/react-wrapper';
 import { registerAllModules } from 'handsontable/registry';
 import 'handsontable/dist/handsontable.full.css';
-import { runQuery } from '../../../api/client.js';
+import { runQuery, saveSnapshot, executeTimeTravelQuery, getManualSnapshotData } from '../../../api/client.js';
 import BaseNode from '../BaseNode';
 
 // Register all Handsontable plugins and modules
 registerAllModules();
 
 // ── Full-Screen Excel Editor Modal ─────────────────────────
-const TableEditorModal = ({ tableName, rows, columns, onClose }) => {
+const TableEditorModal = ({ tableName, initialSnapshotName, isUpdate, overwritePath, rows, columns, onClose, onSaveSuccess }) => {
   const hotRef = useRef(null);
 
   // Convert rows (array of objects) → 2D array Handsontable expects
@@ -38,6 +38,52 @@ const TableEditorModal = ({ tableName, rows, columns, onClose }) => {
         rowDelimiter: '\r\n',
         rowHeaders: false,
       });
+    }
+  }, [tableName]);
+
+  const [saving, setSaving] = useState(false);
+  const [snapshotNameInput, setSnapshotNameInput] = useState(initialSnapshotName || `${tableName}_snap`);
+
+  const handleSaveSnapshot = useCallback(async () => {
+    const hot = hotRef.current?.hotInstance;
+    if (!hot) return;
+    
+    const snapshotName = snapshotNameInput.trim();
+    if (!snapshotName) {
+        alert("Please enter a name for the snapshot");
+        return;
+    }
+
+    setSaving(true);
+    try {
+      const currentData = hot.getData();
+      const currentHeaders = hot.getColHeader();
+      
+      const records = currentData.map(rowArray => {
+        const obj = {};
+        rowArray.forEach((val, idx) => {
+          const colName = currentHeaders[idx];
+          // Try to parse back stringified objects/arrays
+          if (typeof val === 'string' && (val.startsWith('{') || val.startsWith('['))) {
+             try {
+               obj[colName] = JSON.parse(val);
+             } catch(e) {
+               obj[colName] = val;
+             }
+          } else {
+             obj[colName] = val;
+          }
+        });
+        return obj;
+      });
+
+      await saveSnapshot(tableName, snapshotName, records, isUpdate ? overwritePath : null);
+      alert(isUpdate ? `Snapshot "${snapshotName}" updated successfully!` : `Snapshot "${snapshotName}" saved successfully to MinIO!`);
+      if (onSaveSuccess) onSaveSuccess();
+    } catch (err) {
+      alert('Error saving snapshot: ' + err.message);
+    } finally {
+      setSaving(false);
     }
   }, [tableName]);
 
@@ -74,7 +120,33 @@ const TableEditorModal = ({ tableName, rows, columns, onClose }) => {
             {rows.length} rows · {columns.length} cols
           </span>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input 
+            type="text" 
+            value={snapshotNameInput}
+            onChange={(e) => setSnapshotNameInput(e.target.value)}
+            placeholder="Snapshot name..."
+            style={{
+                padding: '4px 8px', borderRadius: 6,
+                background: '#1e293b', color: '#f1f5f9',
+                border: '1px solid #334155', fontSize: '0.72rem',
+                outline: 'none', width: '140px'
+            }}
+          />
+          <button
+            onClick={handleSaveSnapshot}
+            disabled={saving || !snapshotNameInput.trim()}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '5px 12px', borderRadius: 6, cursor: (saving || !snapshotNameInput.trim()) ? 'not-allowed' : 'pointer',
+              background: 'var(--cyan)', color: '#000',
+              border: 'none', fontSize: '0.72rem', fontWeight: 600,
+              opacity: (saving || !snapshotNameInput.trim()) ? 0.7 : 1
+            }}
+          >
+            <Save size={13} />
+            {saving ? 'Saving...' : (isUpdate ? 'Update Snapshot' : 'Save as Snapshot')}
+          </button>
           <button
             onClick={exportCSV}
             style={{
@@ -161,7 +233,14 @@ export const config = {
       setLoading(true);
       setError(null);
       try {
-        const res = await runQuery(sql);
+        let res;
+        if (formData.snapshotPath) {
+          res = await getManualSnapshotData(formData.snapshotPath, 1000);
+        } else if (formData.snapshotId) {
+          res = await executeTimeTravelQuery(sql, formData.snapshotId);
+        } else {
+          res = await runQuery(sql);
+        }
         setResult(res);
       } catch (err) {
         setError(err.response?.data?.detail || err.message);
@@ -180,51 +259,77 @@ export const config = {
         {showEditor && result?.rows?.length > 0 && (
           <TableEditorModal
             tableName={tableName}
+            initialSnapshotName={formData.snapshotPath ? formData.label : `${tableName}_snap`}
+            isUpdate={!!formData.snapshotPath}
+            overwritePath={formData.snapshotPath}
             rows={result.rows}
             columns={result.columns}
             onClose={() => setShowEditor(false)}
+            onSaveSuccess={() => {
+              setShowEditor(false);
+              handleRunQuery();
+            }}
           />
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* SQL editor */}
+          {/* SQL editor / Path display */}
           <div className="field">
-            <label>SQL Query</label>
-            <textarea
-              style={{
-                minHeight: '80px', fontFamily: 'JetBrains Mono', fontSize: '0.7rem',
-                background: 'rgba(0,0,0,0.2)', color: 'var(--cyan)',
-              }}
-              value={sql}
-              onChange={e => setSql(e.target.value)}
-              onKeyDown={e => { if (e.ctrlKey && e.key === 'Enter') handleRunQuery(); }}
-            />
-            <span style={{ fontSize: '0.58rem', color: 'var(--text-muted)' }}>Ctrl+Enter to run</span>
+            {formData.snapshotPath ? (
+              <div style={{
+                padding: '12px', background: 'rgba(20, 184, 166, 0.1)', 
+                border: '1px solid var(--accent-teal)', borderRadius: '6px',
+                display: 'flex', flexDirection: 'column', gap: 6
+              }}>
+                <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--accent-teal)', fontWeight: 600 }}>
+                  Manual Snapshot
+                </span>
+                <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', wordBreak: 'break-all' }}>
+                  {formData.snapshotPath}
+                </span>
+              </div>
+            ) : (
+              <>
+                <label>SQL Query</label>
+                <textarea
+                  style={{
+                    minHeight: '80px', fontFamily: 'JetBrains Mono', fontSize: '0.7rem',
+                    background: 'rgba(0,0,0,0.2)', color: 'var(--cyan)',
+                  }}
+                  value={sql}
+                  onChange={e => setSql(e.target.value)}
+                  onKeyDown={e => { if (e.ctrlKey && e.key === 'Enter') handleRunQuery(); }}
+                />
+                <span style={{ fontSize: '0.58rem', color: 'var(--text-muted)' }}>Ctrl+Enter to run</span>
+              </>
+            )}
           </div>
 
           {/* Run Button */}
-          <button
-            onClick={handleRunQuery}
-            disabled={loading}
-            style={{
-              width: '100%',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-              padding: '10px',
-              background: loading ? 'rgba(251,146,60,0.4)' : 'var(--accent-orange)',
-              color: 'white',
-              border: 'none',
-              borderRadius: 6,
-              fontSize: '0.75rem',
-              fontWeight: 700,
-              cursor: loading ? 'not-allowed' : 'pointer',
-              letterSpacing: '0.05em',
-              transition: 'opacity 0.2s',
-              opacity: loading ? 0.7 : 1,
-            }}
-          >
-            <Play size={14} />
-            {loading ? 'Running Query...' : 'Run Query'}
-          </button>
+          {!formData.snapshotPath && (
+            <button
+              onClick={handleRunQuery}
+              disabled={loading}
+              style={{
+                width: '100%',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                padding: '10px',
+                background: loading ? 'rgba(251,146,60,0.4)' : 'var(--accent-orange)',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                cursor: loading ? 'not-allowed' : 'pointer',
+                letterSpacing: '0.05em',
+                transition: 'opacity 0.2s',
+                opacity: loading ? 0.7 : 1,
+              }}
+            >
+              <Play size={14} />
+              {loading ? 'Running Query...' : 'Run Query'}
+            </button>
+          )}
 
           {/* Error */}
           {error && (
@@ -325,7 +430,7 @@ export default memo(({ data, selected }) => {
 
   return (
     <BaseNode
-      label={data.tableName || data.id || config.label}
+      label={data.label || data.tableName || data.id || config.label}
       icon={config.icon}
       type={config.type}
       data={data}

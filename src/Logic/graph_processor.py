@@ -19,6 +19,7 @@ for _d in [_gateway_dir, _src_dir]:
 
 from gateway.services import neo4j_service, kafka_service, db_service, query_service
 from gateway.services.kafka_service import SILVER_TOPIC
+from gateway.services.event_service import get_event_service
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
@@ -82,7 +83,8 @@ class GraphProcessor:
                 msg = self._consumer.poll(timeout=1.0)
 
                 if msg is None:
-                    pass
+                    self._check_flush_timeout()
+                    continue
                 elif msg.error():
                     if msg.error().code() == KafkaError._PARTITION_EOF:
                         continue
@@ -100,7 +102,6 @@ class GraphProcessor:
                 except Exception as e:
                     logger.error(f"Error in GraphProcessor row processing: {e}")
                 
-                # Move this outside the 'if msg is None' block so it flushes even when busy
                 self._check_flush_timeout()
 
             # Flush remaining on shutdown
@@ -148,8 +149,10 @@ class GraphProcessor:
                 # We merge on the PK field (defaulting to _hve_id), apply all properties, 
                 # and link to a Source node so the entities are discoverable.
                 default_template = (
+                    f"MERGE (s:Source {{ source_id: '{source_id}' }}) "
+                    f"WITH s "
                     f"UNWIND $rows AS row "
-                    f"MERGE (s:Source {{ source_id: row._source_id }}) "
+                    f"WITH s, row WHERE row.{pk_field} IS NOT NULL "
                     f"MERGE (n:Entity:{label} {{ {pk_field}: row.{pk_field} }}) "
                     f"SET n += row "
                     f"MERGE (n)-[:PART_OF_SOURCE]->(s)"
@@ -207,6 +210,19 @@ class GraphProcessor:
                     status="COMPLETED"
                 )
                 logger.info(f"GraphProcessor: Batch of {len(messages)} applied via Blueprint for {source_id}")
+                
+                # Emit event to frontend for real-time updates
+                try:
+                    event_service = get_event_service()
+                    event_service.emit_source_update(source_id, len(messages))
+                except Exception as e:
+                    logger.debug(f"Event emit skipped: {e}")
+                # ── Wake up the Graph Executor ──
+                try:
+                    from gateway.routers.events import trigger_graph_execution
+                    trigger_graph_execution(source_id=source_id)
+                except Exception as e:
+                    logger.debug(f"Graph trigger skipped: {e}")
             else:
                 logger.warning(f"GraphProcessor: No blueprint found for {source_id}. Skipping Graph ingestion.")
                 if log_id:
@@ -265,7 +281,8 @@ class GraphProcessor:
             
             for i in range(0, len(rows), batch_size):
                 batch = rows[i:i+batch_size]
-                self._neo4j.execute_write(bp["cypher_template"], {"rows": batch})
+                safe_batch = self._sanitize_rows(batch)
+                self._neo4j.execute_write(bp["cypher_template"], {"rows": safe_batch})
                 nodes_added += len(batch)
             
             # Update Registry

@@ -13,10 +13,13 @@ const BaseNode = ({
   children,
   color = "var(--cyan)",
   hideDefaultSource = false,
-  hideDefaultTarget = false
+  hideDefaultTarget = false,
+  customSourceHandle = null,
+  customTargetHandle = null,
+  collapsedInfo = null
 }) => {
   return (
-    <div className={`card custom-node ${type} ${selected ? 'selected' : ''}`} style={{ minWidth: 200 }}>
+    <div className={`card custom-node ${type} ${selected ? 'selected' : ''}`} style={{ minWidth: 200, userSelect: 'none' }}>
       <div className="node-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Icon size={18} color={color} />
@@ -36,37 +39,47 @@ const BaseNode = ({
         <span className="node-tag" style={{ fontSize: '0.65rem', opacity: 0.8 }}>
           {type.toUpperCase()}: {data.id}
         </span>
+        
+        {!isExpanded && collapsedInfo && (
+          <div style={{ marginTop: 4, fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+            {collapsedInfo}
+          </div>
+        )}
+        
         {isExpanded && children}
       </div>
 
-      {!hideDefaultSource && (
+      {customSourceHandle || (!hideDefaultSource && (
         <Handle 
           type="source" 
           position={Position.Right} 
           style={{ 
             right: -6, 
+            top: '50%',
+            transform: 'translateY(-50%)',
             background: 'var(--cyan)', 
             width: 12, 
             height: 12, 
             border: '2px solid var(--bg-surface)' 
           }} 
         />
-      )}
+      ))}
       
-      {/* Default target handle for non-input nodes */}
-      {type !== 'input' && !hideDefaultTarget && (
+      {customTargetHandle || (type !== 'input' && !hideDefaultTarget && (
         <Handle 
           type="target" 
           position={Position.Left} 
           style={{ 
             left: -6, 
+            top: '50%',
+            transform: 'translateY(-50%)',
             background: 'var(--amber)', 
             width: 12, 
             height: 12, 
             border: '2px solid var(--bg-surface)' 
           }} 
         />
-      )}
+      ))}
     </div>
   );
 };
