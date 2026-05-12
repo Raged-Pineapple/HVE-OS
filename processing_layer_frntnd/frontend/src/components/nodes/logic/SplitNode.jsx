@@ -3,19 +3,15 @@ import { useEdges, useNodes, Handle, Position, useReactFlow } from 'reactflow';
 import { Split, FileJson, Layers, Search, CheckCircle2 } from 'lucide-react';
 import BaseNode from '../BaseNode';
 
-const resolveUpstreamData = async (incomingNodes, nodes, edges) => {
-  let sources = incomingNodes.filter(n => (n.type === 'dataTrigger' || n.type === 'source') && (n.data?.source_id || n.data?.id));
-  if (sources.length > 0) {
-    if (sources[0].data?.data?.length > 0) {
-      return sources[0].data.data;
+const resolveUpstreamData = (incomingNodes) => {
+  for (const n of incomingNodes) {
+    if (!n.data) continue;
+    const candidates = [n.data.data, n.data.extracted, n.data.resolvedEntity, n.data.pinned, n.data.unpinned];
+    for (const c of candidates) {
+      if (Array.isArray(c) && c.length > 0) return c;
     }
-  }
-  
-  let extractNodes = incomingNodes.filter(n => n.type === 'extractEntities');
-  if (extractNodes.length > 0) {
-    const extNode = extractNodes[0];
-    if (extNode.data?.extracted?.length > 0) {
-      return extNode.data.extracted;
+    for (const c of candidates) {
+      if (c && typeof c === 'object' && !Array.isArray(c)) return [c];
     }
   }
   return [];
@@ -43,20 +39,31 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
       if (incomingNodes.length > 0) {
         setLoading(true);
         
-        resolveUpstreamData(incomingNodes, nodes, edges)
-          .then(dataList => {
+        const dataList = resolveUpstreamData(incomingNodes);
             setEntities(dataList);
             if (specificEntityEdge) {
               let specificName = specificEntityEdge.sourceHandle;
+              let specificId = null;
+              
               if (specificName.startsWith('entity-out-pinned-')) {
                 specificName = specificName.replace('entity-out-pinned-', '');
               } else if (specificName.startsWith('entity-out-')) {
                 specificName = specificName.replace('entity-out-', '');
               }
-              const extNode = incomingNodes.find(n => n.type === 'extractEntities');
-              const propToUse = extNode?.data?.displayNameProperty || formData.displayNameProperty;
+              
+              if (specificName.includes('::')) {
+                const parts = specificName.split('::');
+                specificId = parts[0];
+                specificName = parts.slice(1).join('::');
+              }
+              
+              // Generically attempt to respect the display name property of the immediate parent
+              const sourceNode = incomingNodes.find(n => n.data?.displayNameProperty);
+              const propToUse = sourceNode?.data?.displayNameProperty || formData.displayNameProperty;
               
               const idx = dataList.findIndex((e, i) => {
+                const eUniqueId = e._hve_id != null ? `hve_${e._hve_id}` : e.hve_id != null ? `hve_${e.hve_id}` : e.id != null ? `id_${e.id}` : `idx_${i}`;
+                if (specificId !== null && eUniqueId === specificId) return true;
                 let customName = null;
                 if (propToUse) {
                   const parts = propToUse.split('.');
@@ -69,7 +76,7 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
                     customName = String(current);
                   }
                 }
-                const name = customName || e.name || e.title || e.id || `Entity ${i + 1}`;
+                const name = customName || e.name || e.title || e.id || e._hve_id || `Entity ${i + 1}`;
                 return name === specificName;
               });
               
@@ -78,9 +85,11 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
                 setTimeout(() => handleChange('selectedEntityIndex', idx), 0);
               }
             }
-          })
-          .catch(() => setEntities([]))
-          .finally(() => setLoading(false));
+            else if (dataList.length > 0 && (formData.selectedEntityIndex === undefined || formData.selectedEntityIndex === '')) {
+              setTimeout(() => handleChange('selectedEntityIndex', 0), 0);
+            }
+        
+        setLoading(false);
       } else {
         setEntities([]);
       }
@@ -114,7 +123,7 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
           return String(current);
         }
       }
-      return ent.name || ent.title || ent.id || `Entity ${idx + 1}`;
+      return ent.name || ent.title || ent.id || ent._hve_id || `Entity ${idx + 1}`;
     };
 
     const isAutoSelected = !!specificEntityEdge;
@@ -257,21 +266,32 @@ export default memo(({ id, data, selected }) => {
     const specificEntityEdge = incomingEdges.find(e => e.sourceHandle && e.sourceHandle.startsWith('entity-out-'));
 
     if (incomingNodes.length > 0) {
-      resolveUpstreamData(incomingNodes, nodes, edges).then(dataList => {
+        const dataList = resolveUpstreamData(incomingNodes);
         let ent = null;
         let entName = null;
 
         if (specificEntityEdge) {
           let specificName = specificEntityEdge.sourceHandle;
+          let specificId = null;
+          
           if (specificName.startsWith('entity-out-pinned-')) {
             specificName = specificName.replace('entity-out-pinned-', '');
           } else if (specificName.startsWith('entity-out-')) {
             specificName = specificName.replace('entity-out-', '');
           }
-          const extNode = incomingNodes.find(n => n.type === 'extractEntities');
-          const propToUse = extNode?.data?.displayNameProperty || data.displayNameProperty;
+          
+          if (specificName.includes('::')) {
+            const parts = specificName.split('::');
+            specificId = parts[0];
+            specificName = parts.slice(1).join('::');
+          }
+          
+          const sourceNode = incomingNodes.find(n => n.data?.displayNameProperty);
+          const propToUse = sourceNode?.data?.displayNameProperty || data.displayNameProperty;
 
           ent = dataList.find((e, idx) => {
+            const eUniqueId = e._hve_id != null ? `hve_${e._hve_id}` : e.hve_id != null ? `hve_${e.hve_id}` : e.id != null ? `id_${e.id}` : `idx_${idx}`;
+            if (specificId !== null && eUniqueId === specificId) return true;
             let customName = null;
             if (propToUse) {
               const parts = propToUse.split('.');
@@ -284,7 +304,7 @@ export default memo(({ id, data, selected }) => {
                 customName = String(current);
               }
             }
-            const name = customName || e.name || e.title || e.id || `Entity ${idx + 1}`;
+            const name = customName || e.name || e.title || e.id || e._hve_id || `Entity ${idx + 1}`;
             return name === specificName;
           });
           entName = specificName;
@@ -303,16 +323,29 @@ export default memo(({ id, data, selected }) => {
                 customName = String(current);
               }
             }
-            entName = customName || ent.name || ent.title || ent.id || `Entity ${parseInt(data.selectedEntityIndex) + 1}`;
+            entName = customName || ent.name || ent.title || ent.id || ent._hve_id || `Entity ${parseInt(data.selectedEntityIndex) + 1}`;
+          }
+        } else if (dataList.length > 0) {
+          ent = dataList[0];
+          if (ent) {
+            let customName = null;
+            if (data.displayNameProperty) {
+              const parts = data.displayNameProperty.split('.');
+              let current = ent;
+              for (let i = 0; i < parts.length; i++) {
+                if (current === null || current === undefined) break;
+                current = current[parts[i]];
+              }
+              if (current !== null && current !== undefined && typeof current !== 'object') {
+                customName = String(current);
+              }
+            }
+            entName = customName || ent.name || ent.title || ent.id || ent._hve_id || 'Entity 1';
           }
         }
 
         setSelectedEntity(ent || null);
         setSelectedEntityName(entName || null);
-      }).catch(() => {
-        setSelectedEntity(null);
-        setSelectedEntityName(null);
-      });
     } else {
       setSelectedEntity(null);
       setSelectedEntityName(null);

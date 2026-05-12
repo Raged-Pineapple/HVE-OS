@@ -200,7 +200,7 @@ export const config = {
                     whiteSpace: 'pre-wrap',
                     wordBreak: 'break-all'
                   }}>
-                    {isEmpty ? '{ } — no attrs included' : JSON.stringify(res, null, 2)}
+                    {isEmpty ? '{ } — no attrs included' : (Array.isArray(res) && res.length > 0 ? `[\n  ${JSON.stringify(res[0], null, 2).replace(/\n/g, '\n  ')},\n  ... (${res.length} items total)\n]` : JSON.stringify(res, null, 2))}
                   </pre>
                 </div>
               );
@@ -221,68 +221,6 @@ const STRATEGIES = [
 ];
 
 const CONDITIONS = ['always', '!null', '>0', '!=0'];
-
-function applyTransforms(rawValue, transforms) {
-  let v = Number(rawValue);
-  if (isNaN(v)) return rawValue;
-  for (const t of transforms) {
-    if (t.op === 'add') {
-      const c = t.constantType === 'float'
-        ? parseFloat(t.constant)
-        : parseInt(t.constant, 10);
-      if (!isNaN(c)) v += c;
-    }
-  }
-  return v;
-}
-
-function checkCondition(value, condition) {
-  if (condition === 'always') return true;
-  if (condition === '!null')  return value !== null && value !== undefined && value !== 'null' && value !== 'None';
-  if (condition === '>0')     return Number(value) > 0;
-  if (condition === '!=0')    return Number(value) !== 0;
-  return true;
-}
-
-const fetchUpstreamEntities = async (srcNode, nodes, edges) => {
-  if ((srcNode.type === 'dataTrigger' || srcNode.type === 'source') && (srcNode.data?.source_id || srcNode.data?.id)) {
-    if (srcNode.data?.data?.length > 0) {
-      return srcNode.data.data;
-    }
-  }
-  if (srcNode.type === 'extractEntities') {
-    if (srcNode.data?.extracted?.length > 0) {
-      return srcNode.data.extracted;
-    }
-  }
-  return [];
-};
-
-function buildOutput(slot, dataRows, transforms) {
-  const result = {};
-  const rules = slot.logicRules || {};
-  
-  for (const row of dataRows) {
-    const asgn = (slot.assignments || {})[row.rowKey];
-    if (!asgn || asgn.included === false) continue;
-    if (!checkCondition(row.value, asgn.condition || 'always')) continue;
-    
-    const key = (slot.strategy === 'rename' && asgn.outputKey)
-      ? asgn.outputKey
-      : row.attrKey;
-      
-    // Determine if logic should be applied to this specific row
-    let applyLogicToRow = slot.applyLogic && transforms.length > 0;
-    if (applyLogicToRow && (rules.entities || rules.attributes)) {
-      const entityMatch = !rules.entities || rules.entities.includes(row.entityName);
-      const attrMatch   = !rules.attributes || rules.attributes.includes(row.attrKey);
-      applyLogicToRow = entityMatch && attrMatch;
-    }
-
-    result[key] = applyLogicToRow ? applyTransforms(row.value, transforms) : row.value;
-  }
-  return result;
-}
 
 // ─── component ──────────────────────────────────────────────────────────────
 
@@ -365,54 +303,67 @@ export default memo(({ id, data, selected }) => {
 
         // Otherwise, it's a Data connection
         let value = null;
-        let groupName = 'Attributes';
+        let groupName = src.data?.label || src.type || 'Attributes';
         const handle  = edge.sourceHandle || 'default';
-          let attrKey = attrKeyFromHandle(handle);
+        let attrKey = attrKeyFromHandle(handle);
 
-          // If the upstream is extractEntities and it's a pinned handle, fetch it exactly like Explode Attributes (SplitNode) does
-          if (src.type === 'extractEntities' && handle.startsWith('entity-out-')) {
-            let specificName = handle;
-            if (specificName.startsWith('entity-out-pinned-')) {
-              specificName = specificName.replace('entity-out-pinned-', '');
-            } else {
-              specificName = specificName.replace('entity-out-', '');
-            }
-            
-            attrKey = specificName;
-            groupName = specificName;
-            
-            const dataList = await fetchUpstreamEntities(src, nodes, edges);
-            const propToUse = src.data?.displayNameProperty;
-            
-            const ent = dataList.find((e, idx) => {
-              let customName = null;
-              if (propToUse) {
-                const parts = propToUse.split('.');
-                let current = e;
-                for (let i = 0; i < parts.length; i++) {
-                  if (current === null || current === undefined) break;
-                  current = current[parts[i]];
-                }
-                if (current !== null && current !== undefined && typeof current !== 'object') {
-                  customName = String(current);
-                }
-              }
-              const name = customName || e.name || e.title || e.id || `Entity ${idx + 1}`;
-              return name === specificName;
-            });
-            
-            if (ent) value = ent;
+        // UI Routing Convention: A specific entity extracted from a bulk list via dynamic wire
+        if (handle.startsWith('entity-out-')) {
+          let specificName = handle;
+          let specificId = null;
+          
+          if (specificName.startsWith('entity-out-pinned-')) {
+            specificName = specificName.replace('entity-out-pinned-', '');
           } else {
-            const entity = src.data?.resolvedEntity ?? null;
-            value = resolveAttrValue(entity, attrKey);
-            if (src.type === 'extractEntities') {
-              groupName = attrKey; // Fallback group name
+            specificName = specificName.replace('entity-out-', '');
+          }
+          
+          if (specificName.includes('::')) {
+            const parts = specificName.split('::');
+            specificId = parts[0];
+            specificName = parts.slice(1).join('::');
+          }
+          
+          attrKey = specificName;
+          groupName = specificName;
+          
+          const possibleArrays = [src.data?.data, src.data?.extracted, src.data?.resolvedEntity, src.data?.pinned, src.data?.unpinned].filter(Array.isArray);
+
+          for (const arr of possibleArrays) {
+            if (!arr) continue;
+            const ent = arr.find((e, idx) => {
+              const eUniqueId = e._hve_id != null ? `hve_${e._hve_id}` : e.hve_id != null ? `hve_${e.hve_id}` : e.id != null ? `id_${e.id}` : `idx_${idx}`;
+              return specificId !== null && eUniqueId === specificId;
+            });
+            if (ent) {
+              value = ent;
+              break;
             }
           }
+        } else {
+          // Generic Bulk / Scalar extraction
+          let entity = null;
+          if (src.data && src.data[handle] !== undefined) {
+              entity = src.data[handle]; // Exact handle match
+          } else {
+              // Fallbacks for standard node data envelopes
+              entity = src.data?.data ?? src.data?.resolvedEntity ?? src.data?.extracted ?? null;
+          }
+
+          if (handle === 'data' || handle === 'extracted' || handle === 'pinned' || handle === 'unpinned') {
+              value = entity;
+          } else {
+              value = resolveAttrValue(entity, attrKey);
+          }
+        }
           
           // Auto-explode plain objects
           if (value && typeof value === 'object' && !Array.isArray(value)) {
             Object.entries(value).forEach(([k, v]) => {
+              rows.push({ handle, attrKey: k, value: v, rowKey: `${edge.id}-${k}`, groupName });
+            });
+          } else if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'object') {
+            Object.entries(value[0]).forEach(([k, v]) => {
               rows.push({ handle, attrKey: k, value: v, rowKey: `${edge.id}-${k}`, groupName });
             });
           } else {
@@ -471,24 +422,6 @@ export default memo(({ id, data, selected }) => {
     }
   }, [dataRows]);
 
-  // ── propagate resolvedEntity for each slot ──────────────────────────────
-  useEffect(() => {
-    if (!slots.length) return;
-    const extra = {};
-    slots.forEach((slot, i) => {
-      const out = buildOutput(slot, dataRows, transforms);
-      if (i === 0) extra.resolvedEntity = out;
-      else         extra[`resolvedEntity_${slot.name}`] = out;
-    });
-    const str = JSON.stringify(extra);
-    if (prevOutRef.current !== str) {
-      prevOutRef.current = str;
-      setNodes(nds => nds.map(n =>
-        n.id === id ? { ...n, data: { ...n.data, ...extra } } : n
-      ));
-    }
-  }, [dataRows, transforms, slots, id, setNodes]);
-
   // ── helpers ─────────────────────────────────────────────────────────────
   const setData = patch =>
     setNodes(nds => nds.map(n =>
@@ -540,14 +473,14 @@ export default memo(({ id, data, selected }) => {
   // ── render ───────────────────────────────────────────────────────────────
   return (
     <BaseNode
-      label="Combine"
-      icon={GitMerge}
-      type="combine"
+      label={data.label || config.label}
+      icon={config.icon}
+      type={config.type}
       data={data}
       selected={selected}
       isExpanded={isExpanded}
       setIsExpanded={setIsExpanded}
-      color={purple}
+      color={config.color}
       hideDefaultSource={true}
       hideDefaultTarget={true}
     >
@@ -748,8 +681,6 @@ export default memo(({ id, data, selected }) => {
 
           {slots.map((slot) => {
             const isOpen    = !!openSlots[slot.id];
-            const assembled = buildOutput(slot, dataRows, transforms);
-            const preview   = JSON.stringify(assembled, null, 0);
 
             return (
               <div
@@ -979,7 +910,7 @@ export default memo(({ id, data, selected }) => {
 
                                   {/* Live transformed value preview */}
                                   <span style={{ fontSize: '0.52rem', color: 'var(--cyan)', fontFamily: 'JetBrains Mono', marginLeft: 'auto', flexShrink: 0, opacity: asgn.included !== false ? 1 : 0.3, maxWidth: 60, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                    {(slot.applyLogic && transforms.length) ? String(applyTransforms(row.value, transforms)) : String(row.value ?? 'null')}
+                                    {String(row.value ?? 'null')}
                                   </span>
                                 </div>
                               );

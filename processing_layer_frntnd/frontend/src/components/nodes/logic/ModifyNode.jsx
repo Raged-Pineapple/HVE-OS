@@ -1,42 +1,17 @@
 import React, { memo, useState, useEffect } from 'react';
 import { useEdges, useNodes } from 'reactflow';
 import { Edit, Database } from 'lucide-react';
-import { getEntitiesByLabel } from '../../../api/client.js';
 import BaseNode from '../BaseNode';
 
-const resolveUpstreamData = async (incomingNodes, nodes, edges) => {
-  // Check direct dataTriggers
-  let sources = incomingNodes.filter(n => n.type === 'dataTrigger' && n.data?.id);
-  if (sources.length > 0) {
-    const dataList = await getEntitiesByLabel(sources[0].data.id).catch(() => []);
-    return dataList;
-  }
-  
-  // Check extractEntities nodes
-  let extractNodes = incomingNodes.filter(n => n.type === 'extractEntities');
-  if (extractNodes.length > 0) {
-    const extNode = extractNodes[0];
-    const upEdges = edges.filter(e => e.target === extNode.id);
-    const upNodes = upEdges.map(e => nodes.find(n => n.id === e.source)).filter(Boolean);
-    const trig = upNodes.find(n => n.type === 'dataTrigger' && n.data?.id);
-    
-    if (trig) {
-      let dataList = await getEntitiesByLabel(trig.data.id).catch(() => []);
-      const strategy = extNode.data?.strategy || 'NER';
-      const label = extNode.data?.label || '';
-      
-      if (strategy === 'KeyPath' && label) {
-        dataList = dataList.flatMap(item => {
-          const parts = label.split('.');
-          let current = item;
-          for (let p of parts) {
-            if (current === null || current === undefined) break;
-            current = current[p];
-          }
-          return Array.isArray(current) ? current : (current ? [current] : []);
-        });
-      }
-      return dataList;
+const resolveUpstreamData = (incomingNodes) => {
+  for (const n of incomingNodes) {
+    if (!n.data) continue;
+    const candidates = [n.data.data, n.data.extracted, n.data.resolvedEntity, n.data.pinned, n.data.unpinned];
+    for (const c of candidates) {
+      if (Array.isArray(c) && c.length > 0) return c;
+    }
+    for (const c of candidates) {
+      if (c && typeof c === 'object' && !Array.isArray(c)) return [c];
     }
   }
   return [];
@@ -58,10 +33,9 @@ export const config = {
     useEffect(() => {
       if (incomingNodes.length > 0) {
         setLoading(true);
-        resolveUpstreamData(incomingNodes, nodes, edges)
-          .then(dataList => setEntities(dataList))
-          .catch(() => setEntities([]))
-          .finally(() => setLoading(false));
+        const dataList = resolveUpstreamData(incomingNodes);
+        setEntities(dataList);
+        setLoading(false);
       } else {
         setEntities([]);
       }
@@ -101,7 +75,7 @@ export const config = {
           return String(current);
         }
       }
-      return ent.name || ent.title || ent.id || `Entity ${idx + 1}`;
+      return ent.name || ent.title || ent.id || ent._hve_id || `Entity ${idx + 1}`;
     };
 
     return (
@@ -226,7 +200,7 @@ export default memo(({ id, data, selected }) => {
       const incomingNodes = incomingEdges.map(e => nodes.find(n => n.id === e.source)).filter(Boolean);
 
       if (incomingNodes.length > 0) {
-        resolveUpstreamData(incomingNodes, nodes, edges).then(dataList => {
+          const dataList = resolveUpstreamData(incomingNodes);
           const ent = dataList[data.selectedEntityIndex];
           if (ent) {
             let customName = null;
@@ -244,9 +218,8 @@ export default memo(({ id, data, selected }) => {
                 customName = String(current);
               }
             }
-            setSelectedEntityName(customName || ent.name || ent.title || ent.id || `Entity ${parseInt(data.selectedEntityIndex) + 1}`);
+            setSelectedEntityName(customName || ent.name || ent.title || ent.id || ent._hve_id || `Entity ${parseInt(data.selectedEntityIndex) + 1}`);
           }
-        }).catch(() => {});
       }
     } else {
       setSelectedEntityName(null);

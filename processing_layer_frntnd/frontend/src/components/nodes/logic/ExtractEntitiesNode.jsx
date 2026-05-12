@@ -1,11 +1,11 @@
 import React, { memo, useState, useEffect, useMemo, useRef } from 'react';
-import { Handle, Position, useEdges } from 'reactflow';
+import { Handle, Position, useEdges, useUpdateNodeInternals } from 'reactflow';
 import { Fingerprint, Tags, Layers, Pin, PinOff, Search } from 'lucide-react';
 import BaseNode from '../BaseNode';
 
 const getEntityName = (entity, displayProperty) => {
   if (!displayProperty) {
-    return entity.name || entity.id || entity.title || 'Unknown';
+    return entity.name || entity.title || entity.id || entity._hve_id || 'Unknown';
   }
   
   const parts = displayProperty.split('.');
@@ -20,7 +20,7 @@ const getEntityName = (entity, displayProperty) => {
     return String(current);
   }
   
-  return entity.name || entity.id || 'Unknown';
+  return entity.name || entity.title || entity.id || entity._hve_id || 'Unknown';
 };
 
 export const config = {
@@ -225,17 +225,18 @@ export const config = {
   }
 };
 
-export default memo(({ data, selected }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
+export default memo(({ id, data, selected }) => {
+  const [isExpanded, setIsExpanded] = useState(true);
   const [inputData, setInputData] = useState(null);
   const edges = useEdges();
+  const updateNodeInternals = useUpdateNodeInternals();
 
   const extracted = data.extracted || [];
   const pinned = data.pinned || [];
   const unpinned = data.unpinned || [];
   const pinnedNames = data.pinnedEntities || [];
 
-  const myIncomingEdges = useMemo(() => edges.filter(e => e.target === data.id), [edges, data.id]);
+  const myIncomingEdges = useMemo(() => edges.filter(e => e.target === id), [edges, id]);
   const connectedSourceIds = useMemo(() => myIncomingEdges.map(e => e.source), [myIncomingEdges]);
 
   useEffect(() => {
@@ -261,6 +262,19 @@ export default memo(({ data, selected }) => {
   const effectiveData = inputData || extracted;
   const effectiveCount = effectiveData.length;
 
+  useEffect(() => {
+    updateNodeInternals(id);
+  }, [
+    id,
+    updateNodeInternals,
+    isExpanded,
+    data.displayNameProperty,
+    data.extracted,
+    data.pinnedEntities,
+    data.pinned,
+    data.unpinned
+  ]);
+
   return (
     <div style={{ position: 'relative' }}>
       <Handle 
@@ -272,21 +286,6 @@ export default memo(({ data, selected }) => {
           top: '50%',
           transform: 'translateY(-50%)',
           background: 'var(--amber)', 
-          width: 12, 
-          height: 12, 
-          border: '2px solid var(--bg-surface)',
-          zIndex: 10
-        }} 
-      />
-      <Handle 
-        type="source" 
-        position={Position.Right} 
-        id="extracted" 
-        style={{ 
-          right: -6, 
-          top: '50%',
-          transform: 'translateY(-50%)',
-          background: 'var(--cyan)', 
           width: 12, 
           height: 12, 
           border: '2px solid var(--bg-surface)',
@@ -307,26 +306,33 @@ export default memo(({ data, selected }) => {
         hideDefaultTarget={true}
         collapsedInfo={<><span style={{ textTransform: 'uppercase' }}>{strategy}</span>{totalEntities > 0 ? <span style={{ marginLeft: 8, color: 'var(--cyan)' }}>· {totalEntities} extracted</span> : inputData ? <span style={{ marginLeft: 8, color: 'var(--amber)' }}>· {inputData.length} input</span> : null}</>}
       >
-        {isExpanded && extracted.length > 0 && (
+        {extracted.length > 0 && (
           <div style={{ marginTop: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-              <Tags size={12} color="var(--accent-blue)" />
-              <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', margin: 0 }}>
-                Extracted: <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{totalEntities}</span>
-              </p>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, padding: '4px 8px', background: 'rgba(59,130,246,0.05)', borderRadius: 4, border: '1px solid var(--border-subtle)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Tags size={12} color="var(--accent-blue)" />
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                  All Extracted: <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{totalEntities}</span>
+                </span>
+              </div>
+              <Handle type="source" id="extracted" position={Position.Right} style={{ right: -6, background: 'var(--accent-blue)', width: 10, height: 10, border: '2px solid var(--bg-surface)' }} />
             </div>
 
             {(extracted.length > 0 || pinnedEntities.length > 0) && (
               <>
                 {pinnedEntities.length > 0 && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
-                    <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: '0 0 4px 0' }}>
-                      Pinned — {pinnedEntities.length} entities
-                    </p>
+                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-elevated)', padding: '2px 6px', borderRadius: 4 }}>
+                      <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0 }}>
+                        Pinned — {pinnedEntities.length} entities
+                      </p>
+                      <Handle type="source" id="pinned" position={Position.Right} style={{ right: -6, background: 'var(--cyan)', width: 10, height: 10, border: '2px solid var(--bg-surface)' }} />
+                    </div>
                     {pinnedEntities.map((entity, idx) => {
                       const name = getEntityName(entity, data.displayNameProperty);
+                      const uniqueId = entity._hve_id != null ? `hve_${entity._hve_id}` : entity.hve_id != null ? `hve_${entity.hve_id}` : entity.id != null ? `id_${entity.id}` : `idx_${idx}`;
                       return (
-                        <div key={`pinned-${idx}-${name}`} style={{ 
+                        <div key={`pinned-${uniqueId}-${name}`} style={{ 
                           position: 'relative', 
                           background: 'var(--bg-elevated)', 
                           padding: '4px 8px', 
@@ -343,7 +349,7 @@ export default memo(({ data, selected }) => {
                           </span>
                           <Handle 
                             type="source" 
-                            id={`entity-out-pinned-${name}`}
+                            id={`entity-out-pinned-${uniqueId}::${name}`}
                             position={Position.Right} 
                             style={{ right: -6, background: 'var(--cyan)', width: 10, height: 10, border: '2px solid var(--bg-surface)', zIndex: 10 }}
                           />
@@ -355,13 +361,17 @@ export default memo(({ data, selected }) => {
 
                 {unpinned.length > 0 && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
-                    <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: '0 0 4px 0' }}>
-                      Unpinned — {unpinned.length} entities
-                    </p>
+                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-elevated)', padding: '2px 6px', borderRadius: 4 }}>
+                      <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0 }}>
+                        Unpinned — {unpinned.length} entities
+                      </p>
+                      <Handle type="source" id="unpinned" position={Position.Right} style={{ right: -6, background: 'var(--text-muted)', width: 10, height: 10, border: '2px solid var(--bg-surface)' }} />
+                    </div>
                     {unpinned.slice(0, 10).map((entity, idx) => {
                       const name = getEntityName(entity, data.displayNameProperty);
+                      const uniqueId = entity._hve_id != null ? `hve_${entity._hve_id}` : entity.hve_id != null ? `hve_${entity.hve_id}` : entity.id != null ? `id_${entity.id}` : `idx_${idx}`;
                       return (
-                        <div key={`unpinned-${idx}-${name}`} style={{ 
+                        <div key={`unpinned-${uniqueId}-${name}`} style={{ 
                           position: 'relative', 
                           background: 'var(--bg-elevated)', 
                           padding: '4px 8px', 
@@ -377,7 +387,7 @@ export default memo(({ data, selected }) => {
                           </span>
                           <Handle 
                             type="source" 
-                            id={`entity-out-${name}`}
+                            id={`entity-out-${uniqueId}::${name}`}
                             position={Position.Right} 
                             style={{ right: -6, background: 'var(--cyan)', width: 10, height: 10, border: '2px solid var(--bg-surface)', zIndex: 10 }}
                           />

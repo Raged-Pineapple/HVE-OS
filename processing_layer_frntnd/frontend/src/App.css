@@ -191,3 +191,31 @@
   border-radius: 4px;
   font-weight: 600;
 }
+
+/* Hide the dashed bounding box that appears around selected node groups */
+.react-flow__nodesselection-rect {
+  display: none !important;
+}
+
+/* Force internal handles to anchor correctly when node is collapsed */
+.custom-node.collapsed .node-content-children * {
+  position: static !important;
+}
+
+.custom-node.collapsed .node-content-children .react-flow__handle {
+  position: absolute !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.custom-node.collapsed .node-content-children .react-flow__handle[data-handlepos="right"] {
+  right: -6px !important;
+  left: auto !important;
+}
+
+.custom-node.collapsed .node-content-children .react-flow__handle[data-handlepos="left"] {
+  left: -6px !important;
+  right: auto !important;
+}

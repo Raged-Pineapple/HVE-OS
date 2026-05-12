@@ -54,7 +54,16 @@ export const attrKeyFromHandle = (handleId) => {
   if (!handleId) return 'default';
   if (handleId.startsWith('attr-out-')) return handleId.slice('attr-out-'.length);
   if (handleId.startsWith('add-out-')) return handleId.slice('add-out-'.length);
-  if (handleId.startsWith('entity-out-pinned-')) return handleId.slice('entity-out-pinned-'.length);
+  if (handleId.startsWith('entity-out-pinned-')) {
+    let name = handleId.slice('entity-out-pinned-'.length);
+    if (name.includes('::')) name = name.split('::').slice(1).join('::');
+    return name;
+  }
+  if (handleId.startsWith('entity-out-')) {
+    let name = handleId.slice('entity-out-'.length);
+    if (name.includes('::')) name = name.split('::').slice(1).join('::');
+    return name;
+  }
   if (handleId.startsWith('combine-out-'))       return handleId.slice('combine-out-'.length);
   return handleId;
 };

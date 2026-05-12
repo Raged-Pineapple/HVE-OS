@@ -68,11 +68,9 @@ export default memo(({ id, data, selected }) => {
       customSourceHandle={customSourceHandle}
       collapsedInfo={<><span style={{ color: 'var(--cyan)', fontWeight: 600 }}>{sourceId}</span>{entityCount > 0 && <span style={{ marginLeft: 8 }}> · {entityCount} entities</span>}</>}
     >
-      {isExpanded && (
-        <div>
-          {displayedKeys.length > 0 && (
-            <div style={{ marginTop: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 8 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+      <div>
+        {displayedKeys.length > 0 && (
+          <div style={{ marginTop: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 8 }}>              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                 <button 
                   onClick={() => setShowMeta(!showMeta)}
                   style={{ background: 'none', border: 'none', color: showMeta ? 'var(--cyan)' : 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, padding: 0, fontSize: '0.55rem' }}
@@ -97,7 +95,6 @@ export default memo(({ id, data, selected }) => {
             </div>
           )}
         </div>
-      )}
     </BaseNode>
   );
 });

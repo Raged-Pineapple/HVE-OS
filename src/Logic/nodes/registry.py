@@ -3,8 +3,8 @@ registry.py — Node Registry
 Manages registration and discovery of all node types.
 """
 import logging
-from typing import Dict, List, Type, Optional, Any
-from .base import BaseNode, NodeMetadata
+from typing import Dict, List, Type, Optional, Any, Callable
+from .base import BaseNode, NodeMetadata, NodeResult
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,51 @@ def register_node(node_class: Type[BaseNode]) -> Type[BaseNode]:
     NODE_REGISTRY[node_type] = node_class
     logger.info(f"Registered node: {node_type} ({node_class.metadata.label})")
     return node_class
+
+
+def node_function(
+    type: str,
+    label: str,
+    category: str,
+    color: str,
+    input_handles: List[str] = None,
+    output_handles: List[str] = None,
+    description: str = "",
+    hide_in_sidebar: bool = False
+):
+    """
+    Decorator to create and register a node from a simple Python function.
+    The wrapped function should accept (inputs: Dict, config: Dict) and return a Dict of outputs.
+    """
+    if input_handles is None:
+        input_handles = []
+    if output_handles is None:
+        output_handles = []
+
+    def decorator(func: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]]) -> Type[BaseNode]:
+        class FunctionalNode(BaseNode):
+            metadata = NodeMetadata(
+                type=type,
+                label=label,
+                category=category,
+                color=color,
+                input_handles=input_handles,
+                output_handles=output_handles,
+                description=description,
+                hide_in_sidebar=hide_in_sidebar
+            )
+
+            def execute(self, inputs: Dict[str, Any], config: Dict[str, Any]) -> NodeResult:
+                try:
+                    outputs = func(inputs, config)
+                    return NodeResult(success=True, outputs=outputs)
+                except Exception as e:
+                    logger.error(f"Error executing functional node {type}: {e}", exc_info=True)
+                    return NodeResult(success=False, outputs={}, error=str(e))
+        
+        FunctionalNode.__name__ = "".join(word.capitalize() for word in type.split("_")) + "Node"
+        return register_node(FunctionalNode)
+    return decorator
 
 
 def get_node(node_type: str) -> Optional[Type[BaseNode]]:

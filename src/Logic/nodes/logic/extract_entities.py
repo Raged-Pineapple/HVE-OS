@@ -171,15 +171,24 @@ class ExtractEntitiesNode(BaseNode):
         unpinned_entities = []
         dynamic_outputs = {}
         
-        for entity in extracted:
+        for idx, entity in enumerate(extracted):
             name = self._get_entity_name(entity, display_property)
             
+            if entity.get('_hve_id') is not None:
+                unique_id = f"hve_{entity['_hve_id']}"
+            elif entity.get('hve_id') is not None:
+                unique_id = f"hve_{entity['hve_id']}"
+            elif entity.get('id') is not None:
+                unique_id = f"id_{entity['id']}"
+            else:
+                unique_id = f"idx_{idx}"
+                
             if name in pinned_names:
                 pinned_entities.append(entity)
-                dynamic_outputs[f"entity-out-pinned-{name}"] = entity
+                dynamic_outputs[f"entity-out-pinned-{unique_id}::{name}"] = entity
             else:
                 unpinned_entities.append(entity)
-                dynamic_outputs[f"entity-out-{name}"] = entity
+                dynamic_outputs[f"entity-out-{unique_id}::{name}"] = entity
         
         logger.info(f"ExtractEntities: Extracted {len(extracted)} entities, {len(pinned_entities)} pinned, {len(unpinned_entities)} unpinned")
         
@@ -205,8 +214,16 @@ class ExtractEntitiesNode(BaseNode):
 
     def _get_entity_name(self, entity: Dict, display_property: str) -> str:
         """Get the display name for an entity."""
+        
+        def _get_fallback_name(ent: Dict) -> str:
+            for k in ['name', 'title', 'id', '_hve_id']:
+                val = ent.get(k)
+                if val is not None and str(val).strip():
+                    return str(val).strip()
+            return 'Unknown'
+
         if not display_property:
-            return entity.get('name') or entity.get('id') or entity.get('title') or 'Unknown'
+            return _get_fallback_name(entity)
         
         parts = display_property.split('.')
         current = entity
@@ -219,9 +236,11 @@ class ExtractEntitiesNode(BaseNode):
                 current = current.get(part)
         
         if current is not None and not isinstance(current, (dict, list)):
-            return str(current)
+            str_val = str(current).strip()
+            if str_val:
+                return str_val
         
-        return entity.get('name') or entity.get('id') or 'Unknown'
+        return _get_fallback_name(entity)
 
     def validate_config(self, config: Dict[str, Any]) -> tuple[bool, Optional[str]]:
         """Validate configuration."""

@@ -45,7 +45,11 @@ class SplitNode(BaseNode):
         logger.info(f"SplitNode received config keys: {list(config.keys())}")
 
         # 1. Resolve which data we are working with
-        input_data = inputs.get('data') or inputs.get('default') or inputs.get('target')
+        input_data = inputs.get('data')
+        if input_data is None:
+            input_data = inputs.get('default')
+        if input_data is None:
+            input_data = inputs.get('target')
 
         logger.info(f"SplitNode resolved input_data type: {type(input_data)}")
 
@@ -54,46 +58,55 @@ class SplitNode(BaseNode):
         # The React UI pushes the fully resolved entity into the config block
         resolved_entity = config.get("resolvedEntity")
         
-        # Priority 1: Direct reactive dictionary from an upstream Extract node
-        if isinstance(input_data, dict) and input_data:
-            entity = input_data
-            logger.info(f"SplitNode Priority 1: Picked direct dictionary with {len(entity)} keys")
-        # Priority 2: A list of entities passed down, filtered by UI selection
-        elif isinstance(input_data, list) and len(input_data) > 0:
-            selected_idx = config.get("selectedEntityIndex")
-            logger.info(f"SplitNode Priority 2: Received list of {len(input_data)} items. UI selected_idx: {selected_idx}")
-            if selected_idx is not None:
-                try:
-                    idx = int(selected_idx)
-                    if 0 <= idx < len(input_data):
-                        entity = input_data[idx]
-                        logger.info(f"SplitNode: Picked entity at index {idx}")
-                except (ValueError, TypeError):
-                    pass
-            if not entity:
-                entity = input_data[0]
-                logger.info("SplitNode: Defaulted to index 0")
-        # Priority 3: Fallback to the UI-resolved entity state
+        if input_data is not None:
+            # Priority 1: Direct reactive dictionary from an upstream Extract node
+            if isinstance(input_data, dict):
+                entity = input_data
+                logger.info(f"SplitNode Priority 1: Picked direct dictionary with {len(entity)} keys")
+            # Priority 2: A list of entities passed down, filtered by UI selection
+            elif isinstance(input_data, list) and len(input_data) > 0:
+                selected_idx = config.get("selectedEntityIndex")
+                logger.info(f"SplitNode Priority 2: Received list of {len(input_data)} items. UI selected_idx: {selected_idx}")
+                if selected_idx is not None:
+                    try:
+                        idx = int(selected_idx)
+                        if 0 <= idx < len(input_data):
+                            entity = input_data[idx]
+                            logger.info(f"SplitNode: Picked entity at index {idx}")
+                    except (ValueError, TypeError):
+                        pass
+                if not entity:
+                    entity = input_data[0]
+                    logger.info("SplitNode: Defaulted to index 0")
+            elif isinstance(input_data, list) and len(input_data) == 0:
+                logger.info("SplitNode: Received empty list. Nothing to explode.")
+            else:
+                logger.warning(f"SplitNode: Received non-explodable data type: {type(input_data)}")
+                
+        # Priority 3: Fallback to the UI-resolved entity state ONLY if no input_data was provided at all
         elif resolved_entity and isinstance(resolved_entity, dict):
             entity = resolved_entity
             logger.info(f"SplitNode Priority 3: Fell back to UI resolvedEntity with {len(entity)} keys")
         else:
             logger.warning("SplitNode: No valid entity could be resolved from inputs or config!")
 
-        outputs = {"data": entity}   # Provide fallback raw pass-through
+        logger.info(f"SplitNode processing entity: {entity}")
+
+        outputs = {"data": entity, "resolvedEntity": entity}   # Provide fallback raw pass-through and UI preview
 
         # 2. Explode attributes dynamically for the graph engine routing
         if isinstance(entity, dict):
             for k, v in entity.items():
                 parsed_val = _parse_nested_literal(v)
-                outputs[f"attr-out-{k}"] = parsed_val
+                outputs[f"attr-out-{k}"] = {k: parsed_val}
                 
                 # Explode 1-level deep for nested JSON objects to mirror the UI schema exactly
                 if isinstance(parsed_val, dict):
                     for sub_k, sub_v in parsed_val.items():
-                        outputs[f"attr-out-{k}.{sub_k}"] = sub_v
+                        outputs[f"attr-out-{k}.{sub_k}"] = {sub_k: sub_v}
 
-        logger.info(f"SplitNode: Exploded entity into {len(outputs) - 1} dynamic attribute streams.")
+        logger.info(f"SplitNode outputs generated: {list(outputs.keys())}")
+        logger.info(f"SplitNode: Exploded entity into {len(outputs) - 2} dynamic attribute streams.")
         logger.info("============== SPLIT NODE EXECUTION FINISHED ==============")
 
         return NodeResult(

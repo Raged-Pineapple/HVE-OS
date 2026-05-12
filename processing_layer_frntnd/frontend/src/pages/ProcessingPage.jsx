@@ -18,8 +18,7 @@ import { Play, Loader } from 'lucide-react';
 
 const nodeTypes = getNodeTypes();
 
-let id = 0;
-const getId = () => `node_${id++}`;
+const getId = () => `node_${crypto.randomUUID()}`;
 
 const LogicGraphTab = () => {
   const reactFlowWrapper = useRef(null);
@@ -186,7 +185,7 @@ const LogicGraphTab = () => {
   }, [nodes, edges, isWsConnected]);
 
   const onConnect = useCallback(
-    (params) => setEdges((eds) => addEdge(params, eds)),
+    (params) => setEdges((eds) => addEdge({ ...params, type: 'smoothstep' }, eds)),
     [setEdges]
   );
 
@@ -324,6 +323,12 @@ const LogicGraphTab = () => {
             onNodeDoubleClick={onNodeDoubleClick}
             nodeTypes={nodeTypes}
             deleteKeyCode={['Backspace', 'Delete']}
+            panOnDrag={[1, 2]}
+            selectionOnDrag={true}
+            selectionMode="partial"
+            selectionKeyCode={null}
+            connectionLineType="smoothstep"
+            defaultEdgeOptions={{ type: 'smoothstep' }}
             fitView
           >
             <Controls />

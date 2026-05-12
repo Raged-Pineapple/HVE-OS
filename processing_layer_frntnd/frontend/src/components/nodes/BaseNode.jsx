@@ -19,7 +19,7 @@ const BaseNode = ({
   collapsedInfo = null
 }) => {
   return (
-    <div className={`card custom-node ${type} ${selected ? 'selected' : ''}`} style={{ minWidth: 200, userSelect: 'none' }}>
+    <div className={`card custom-node ${type} ${selected ? 'selected' : ''} ${!isExpanded ? 'collapsed' : ''}`} style={{ minWidth: 200, userSelect: 'none' }}>
       <div className="node-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Icon size={18} color={color} />
@@ -46,7 +46,14 @@ const BaseNode = ({
           </div>
         )}
         
-        {isExpanded && children}
+        <div className="node-content-children" style={{ 
+          height: isExpanded ? 'auto' : 0, 
+          overflow: isExpanded ? 'visible' : 'hidden',
+          opacity: isExpanded ? 1 : 0,
+          pointerEvents: isExpanded ? 'auto' : 'none'
+        }}>
+          {children}
+        </div>
       </div>
 
       {customSourceHandle || (!hideDefaultSource && (

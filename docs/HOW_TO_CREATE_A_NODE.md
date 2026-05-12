@@ -171,6 +171,7 @@ export default memo(({ data, selected }) => {
       isExpanded={isExpanded}
       setIsExpanded={setIsExpanded}
       color={config.color}
+      collapsedInfo={<span style={{ color: 'var(--text-muted)' }}>{inputData.length} inputs</span>}
     >
       <div style={{ marginTop: 12, borderTop: '1px solid var(--border-subtle)', paddingTop: 8 }}>
         {/* Custom UI content */}
@@ -210,6 +211,9 @@ The `BaseNode` component accepts:
 - `isExpanded` - Expand/collapse state
 - `setIsExpanded` - Callback to toggle expand
 - `color` - Accent color
+- `collapsedInfo` - JSX/Text to display cleanly when the node is collapsed
+- `hideDefaultSource` - Hide the default right-side handle (boolean)
+- `hideDefaultTarget` - Hide the default left-side handle (boolean)
 
 ---
 
