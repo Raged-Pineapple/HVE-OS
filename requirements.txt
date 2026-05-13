@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+aiohttp
+psycopg2
+pyiceberg[pyarrow]
+minio
+neo4j
+duckdb
+confluent-kafka
+tenseal
+jmespath
