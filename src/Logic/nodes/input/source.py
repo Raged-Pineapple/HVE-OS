@@ -5,7 +5,7 @@ Fetches all entities from a Neo4j source for use in downstream nodes.
 import logging
 import json
 import ast
-from typing import Any, Dict
+from typing import Any, Dict,Optional
 from ..base import BaseNode, NodeMetadata, NodeResult
 from ..registry import register_node
 

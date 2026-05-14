@@ -22,6 +22,7 @@ MINIO_PASS = os.getenv("MINIO_ROOT_PASSWORD", "hve_password123")
 BRONZE_BUCKET = "hve-bronze"
 SILVER_BUCKET = "hve-silver"
 DLQ_BUCKET = "hve-dlq"
+ICEBERG_BUCKET = "hve-iceberg"
 
 # Initialize client
 minio_client = Minio(
@@ -33,7 +34,7 @@ minio_client = Minio(
 
 def ensure_buckets():
     """Create required buckets if they don't exist."""
-    for bucket in [BRONZE_BUCKET, SILVER_BUCKET, DLQ_BUCKET]:
+    for bucket in [BRONZE_BUCKET, SILVER_BUCKET, DLQ_BUCKET, ICEBERG_BUCKET]:
         try:
             if not minio_client.bucket_exists(bucket):
                 minio_client.make_bucket(bucket)
@@ -42,8 +43,8 @@ def ensure_buckets():
             logger.warning(f"Bucket check/create for {bucket}: {e}")
 
 def clear_all_buckets():
-    """Wipes all data from Bronze, Silver, and DLQ buckets."""
-    for bucket in [BRONZE_BUCKET, SILVER_BUCKET, DLQ_BUCKET]:
+    """Wipes all data from Bronze, Silver, DLQ, and Iceberg buckets."""
+    for bucket in [BRONZE_BUCKET, SILVER_BUCKET, DLQ_BUCKET, ICEBERG_BUCKET]:
         try:
             if minio_client.bucket_exists(bucket):
                 objects = minio_client.list_objects(bucket, recursive=True)

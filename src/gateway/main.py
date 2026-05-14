@@ -6,6 +6,11 @@ import os
 import sys
 import logging
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+
+# Load environment variables before importing any local modules that might initialize connections
+_env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
+load_dotenv(dotenv_path=_env_path)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -232,4 +237,5 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True, ws="websockets")
+    api_port = int(os.getenv("API_PORT", "8000"))
+    uvicorn.run("main:app", host="127.0.0.1", port=api_port, reload=True, ws="websockets")

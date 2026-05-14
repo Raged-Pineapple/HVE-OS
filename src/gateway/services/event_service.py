@@ -30,6 +30,11 @@ class EventService:
             except Exception as e:
                 logger.warning(f"Event callback failed: {e}")
     
+    def subscribe(self, callback):
+        """Add a callback to receive real-time events."""
+        if callback not in self._subscribers:
+            self._subscribers.append(callback)
+
     def emit_source_update(self, source_id: str, entity_count: int):
         """Emit source update event when new data arrives in Neo4j."""
         self.emit("source_update", {
@@ -45,3 +50,7 @@ def get_event_service() -> EventService:
     if _event_service is None:
         _event_service = EventService()
     return _event_service
+
+def subscribe(callback):
+    """Module-level convenience method to subscribe."""
+    get_event_service().subscribe(callback)

@@ -94,7 +94,7 @@ pip install -r src\gateway\requirements.txt
 ## Step 3: Start the Gateway API
 
 ```powershell
-cd d:\hive_platform\src\gateway
+cd d:\HVE_OS\src\gateway
 python main.py
 ```
 
