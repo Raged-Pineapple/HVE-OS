@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Database configuration
 DB_CONFIG = {
     "host": os.getenv("POSTGRES_HOST", "127.0.0.1"),
-    "port": int(os.getenv("DB_PORT", "5433")),
+    "port": int(os.getenv("DB_PORT", "5432")),
     "database": os.getenv("POSTGRES_DB", "hve_control_plane"),
     "user": os.getenv("POSTGRES_USER", "hve_admin"),
     "password": os.getenv("POSTGRES_PASSWORD", "hve_password123"),

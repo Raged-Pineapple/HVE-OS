@@ -2,13 +2,14 @@
 relationship_mapping_node.py — AI Relationship Mapping Node
 Uses AI to map relationships between entities based on their attributes.
 """
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 import json
 import random
 import threading
 import requests
 import logging
 import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from ..base import BaseNode, NodeMetadata, NodeResult
 from ..registry import register_node
 from gateway.services.neo4j_service import get_neo4j_service
@@ -19,14 +20,19 @@ logger = logging.getLogger(__name__)
 # Structure: { execution_hash: { "mapped": set(), "unmapped": set() } }
 _local_evaluation_cache = {}
 
+# Default parallelism — up to this many AI calls fire simultaneously.
+# Keep conservative (3-5) to avoid rate-limiting from API providers.
+_DEFAULT_WORKERS = 5
 
-def _interruptible_post(url: str, headers: dict, data: dict, cancel_event: threading.Event, timeout: int = 60):
+
+def _interruptible_post(url: str, headers: dict, data: dict,
+                        cancel_event: threading.Event, timeout: int = 60):
     """
     Run requests.post() in a daemon thread and poll cancel_event every 500 ms.
 
     If cancel_event is set while the HTTP call is in-flight, the underlying
     Session is closed, which causes requests to raise a ConnectionError in the
-    sub-thread.  We catch that and return (None, True) so the caller knows it
+    sub-thread. We catch that and return (None, True) so the caller knows it
     was cancelled rather than a real network error.
 
     Returns:
@@ -34,8 +40,8 @@ def _interruptible_post(url: str, headers: dict, data: dict, cancel_event: threa
         response is None when cancelled or when a network error occurred.
     """
     session = requests.Session()
-    result_holder = [None]   # [response | None]
-    error_holder  = [None]   # [Exception | None]
+    result_holder = [None]
+    error_holder  = [None]
 
     def _do_post():
         try:
@@ -46,7 +52,6 @@ def _interruptible_post(url: str, headers: dict, data: dict, cancel_event: threa
     thread = threading.Thread(target=_do_post, daemon=True)
     thread.start()
 
-    # Poll until the thread finishes or we're told to cancel
     while thread.is_alive():
         if cancel_event.is_set():
             logger.warning("[RelationshipMappingNode] 🛑 Cancel event fired — closing HTTP session to abort in-flight AI call.")
@@ -54,16 +59,247 @@ def _interruptible_post(url: str, headers: dict, data: dict, cancel_event: threa
                 session.close()
             except Exception:
                 pass
-            thread.join(timeout=5)   # give the thread a moment to notice the closed socket
-            return None, True        # (response=None, cancelled=True)
-        cancel_event.wait(0.5)       # block for at most 500 ms, then re-check
+            thread.join(timeout=5)
+            return None, True
+        cancel_event.wait(0.5)
 
-    # Thread finished normally
     if error_holder[0] is not None:
-        # Re-raise so the caller's existing except block handles it
         raise error_holder[0]
 
-    return result_holder[0], False   # (response, cancelled=False)
+    return result_holder[0], False
+
+
+def _evaluate_entity(
+    source_entity: dict,
+    target_entities: list,
+    target_fields: list,
+    source_fields: list,
+    is_string_target: bool,
+    relation_type: str,
+    safe_rel_type: str,
+    min_score: float,
+    ignore_exact_matches: bool,
+    ai_provider: str,
+    mistral_api_key: Optional[str],
+    mistral_model: str,
+    gemini_api_key: Optional[str],
+    gemini_model: str,
+    cancel_event: threading.Event,
+) -> Tuple[dict, bool, bool, Optional[list], Optional[str]]:
+    """
+    Evaluate a single source entity against all targets.
+
+    Runs entirely in a worker thread. Thread-safe: no shared mutable state is
+    written here — Neo4j writes happen on a dedicated write-back thread after
+    this returns.
+
+    Returns:
+        (source_entity, has_mapped, cancelled, ai_response, ai_input_prompt)
+    """
+    if cancel_event.is_set():
+        return source_entity, False, True, None, None
+
+    def extract_fields(ent, fields):
+        if not fields:
+            return ent
+        # Ensure _hve_id and text are always preserved for AI reference
+        return {k: v for k, v in ent.items() if k in fields or k == "_hve_id" or k == "text"}
+
+    source_payload = extract_fields(source_entity, source_fields)
+
+    valid_targets = [t for t in target_entities if isinstance(t, dict) and t.get("_hve_id") != source_entity.get("_hve_id")]
+    
+    # Guarantee that string/user targets are always included in the evaluation sample
+    guaranteed_targets = [t for t in valid_targets if str(t.get("_hve_id")).startswith("__string_target_")]
+    peer_targets = [t for t in valid_targets if not str(t.get("_hve_id")).startswith("__string_target_")]
+    
+    sample_size = min(50 - len(guaranteed_targets), len(peer_targets))
+    sample_size = max(0, sample_size)
+    sample_targets = guaranteed_targets + (random.sample(peer_targets, sample_size) if sample_size > 0 else [])
+    
+    logger.info(f"[RelationshipMappingNode] [{source_entity.get('_hve_id')}] Guaranteed targets count: {len(guaranteed_targets)}. Sample targets total: {len(sample_targets)}.")
+    
+    target_payloads = [extract_fields(t, target_fields) for t in sample_targets]
+
+    system_prompt = f"""You are an expert data analyst AI.
+Your task is to determine the likelihood of a '{relation_type}' relationship between a Source Entity and a list of Target Entities based on their attributes.
+For each Target Entity, provide a relationship score between 0.0 and 1.0 (where 1.0 is extremely likely) and a single-line reason.
+IMPORTANT: The "target_id" in your response MUST be the exact "_hve_id" value from the provided Target Entities. Do not use any other ID field.
+Output strictly in JSON format as a list of dictionaries with keys: "target_id", "score", "reason"."""
+
+    user_prompt = f"Source Entity:\n{json.dumps(source_payload, indent=2)}\n\nTarget Entities:\n{json.dumps(target_payloads, indent=2)}"
+
+    ai_response = None
+
+    try:
+        if ai_provider == "mistral":
+            if not mistral_api_key:
+                logger.warning("[RelationshipMappingNode] No Mistral API Key provided. Skipping AI call.")
+                return source_entity, False, False, None, user_prompt
+
+            logger.info(f"[RelationshipMappingNode] ⏳ [{source_entity.get('_hve_id')}] → Mistral {mistral_model}...")
+            url = "https://api.mistral.ai/v1/chat/completions"
+            headers = {"Content-Type": "application/json", "Authorization": f"Bearer {mistral_api_key}"}
+            data = {
+                "model": mistral_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+            }
+            resp, cancelled = _interruptible_post(url, headers, data, cancel_event)
+            if cancelled:
+                return source_entity, False, True, None, user_prompt
+            if resp and resp.ok:
+                ai_text = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "[]")
+                if ai_text.startswith("```json"):
+                    ai_text = ai_text.strip("`").strip().removeprefix("json").strip()
+                elif ai_text.startswith("```"):
+                    ai_text = ai_text.strip("`").strip()
+                if cancel_event.is_set():
+                    return source_entity, False, True, None, user_prompt
+                ai_response = json.loads(ai_text)
+                logger.info(f"[RelationshipMappingNode] ✅ [{source_entity.get('_hve_id')}] AI response received ({len(ai_response)} items).")
+            elif resp:
+                logger.error(f"[RelationshipMappingNode] Mistral API Error for {source_entity.get('_hve_id')}: {resp.text}")
+
+        else:  # gemini
+            if not gemini_api_key:
+                logger.warning("[RelationshipMappingNode] No Gemini API Key provided. Skipping AI call.")
+                return source_entity, False, False, None, user_prompt
+
+            logger.info(f"[RelationshipMappingNode] ⏳ [{source_entity.get('_hve_id')}] → {gemini_model}...")
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent?key={gemini_api_key}"
+            headers = {"Content-Type": "application/json"}
+            data = {
+                "system_instruction": {"parts": [{"text": system_prompt}]},
+                "contents": [{"parts": [{"text": user_prompt}]}],
+                "generationConfig": {"response_mime_type": "application/json"}
+            }
+            resp, cancelled = _interruptible_post(url, headers, data, cancel_event)
+            if cancelled:
+                return source_entity, False, True, None, user_prompt
+            if resp and resp.ok:
+                ai_text = resp.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "[]")
+                if cancel_event.is_set():
+                    return source_entity, False, True, None, user_prompt
+                ai_response = json.loads(ai_text)
+                logger.info(f"[RelationshipMappingNode] ✅ [{source_entity.get('_hve_id')}] AI response received ({len(ai_response)} items).")
+            elif resp:
+                logger.error(f"[RelationshipMappingNode] Gemini API Error for {source_entity.get('_hve_id')}: {resp.text}")
+
+    except Exception as e:
+        logger.error(f"[RelationshipMappingNode] Exception evaluating {source_entity.get('_hve_id')}: {e}", exc_info=True)
+        return source_entity, False, False, None, user_prompt
+
+    return source_entity, False, False, ai_response, user_prompt
+
+
+def _write_relationships(
+    source_entity: dict,
+    ai_response: list,
+    target_entities: list,
+    safe_rel_type: str,
+    min_score: float,
+    ignore_exact_matches: bool,
+    neo4j,
+) -> Tuple[int, bool]:
+    """
+    Write AI-scored relationships to Neo4j for a single source entity.
+    Returns (relationships_created, has_mapped).
+    Thread-safe: each call uses its own Neo4j session from the shared pool.
+    """
+    mapped_count = 0
+    has_mapped = False
+
+    for item in ai_response:
+        target_id = item.get("target_id")
+        score = item.get("score", 0.0)
+        reason = item.get("reason", "")
+
+        try:
+            score_val = float(score)
+            if score_val < 0.0 or score_val > 1.0:
+                score_val = 0.0
+        except (ValueError, TypeError):
+            score_val = 0.0
+
+        is_exact_match = (score_val == 1.0)
+        should_create = (score_val >= min_score) and not (ignore_exact_matches and is_exact_match)
+        
+        target_display = str(target_id)
+        target_text = ""
+        if str(target_id).startswith("__string_target_"):
+            for t in target_entities:
+                if t.get("_hve_id") == target_id:
+                    target_text = t.get("text", "")
+                    target_display = f'Concept: "{target_text}"'
+                    break
+
+        status_emoji = "✅ APPROVED" if should_create else "❌ REJECTED"
+        logger.info(
+            f"[RelationshipMappingNode] 🧠 AI Score: {score_val:.2f} | {status_emoji} | "
+            f"[{source_entity.get('_hve_id')}] → [{target_display}] | Reason: {reason}"
+        )
+
+        if str(target_id).startswith("__string_target_") and should_create:
+                    
+            cypher = f"""
+            MATCH (s:Entity {{ _hve_id: $source_id }})
+            MERGE (t:Entity:Concept {{ text: $target_text }})
+            ON CREATE SET t._hve_id = randomUUID(), t._source_id = 'user_string'
+            WITH s, t
+            MERGE (src:Source {{ source_id: 'user_string' }})
+            MERGE (t)-[:PART_OF_SOURCE]->(src)
+            MERGE (s)-[r:{safe_rel_type}]->(t)
+            SET r.score = $score, r.reason = $reason, r.ai_generated = true
+            """
+            try:
+                summary = neo4j.execute_write(cypher, {
+                    "source_id": source_entity.get("_hve_id"),
+                    "target_text": target_text,
+                    "score": score_val,
+                    "reason": reason
+                })
+                if summary and getattr(summary.counters, 'relationships_created', 0) > 0:
+                    mapped_count += 1
+                    has_mapped = True
+                    source_entity.setdefault("_ai_mapped_targets", []).append({
+                        "target_text": target_text, "score": score_val, "reason": reason
+                    })
+                    logger.info(f"  [+] DB CONFIRMED -> Linked '{source_entity.get('_hve_id')}' to Concept '{target_text}' (Score: {score_val})")
+                else:
+                    logger.warning(f"  [!] DB FAILED -> 0 rels created for '{source_entity.get('_hve_id')}' → '{target_text}'")
+            except Exception as e:
+                logger.error(f"[RelationshipMappingNode] Write error (string target): {e}")
+
+        elif target_id and should_create:
+            cypher = f"""
+            MATCH (s:Entity {{ _hve_id: $source_id }})
+            MATCH (t:Entity {{ _hve_id: $target_id }})
+            MERGE (s)-[r:{safe_rel_type}]->(t)
+            SET r.score = $score, r.reason = $reason, r.ai_generated = true
+            """
+            try:
+                summary = neo4j.execute_write(cypher, {
+                    "source_id": source_entity.get("_hve_id"),
+                    "target_id": target_id,
+                    "score": score_val,
+                    "reason": reason
+                })
+                if summary and getattr(summary.counters, 'relationships_created', 0) > 0:
+                    mapped_count += 1
+                    has_mapped = True
+                    source_entity.setdefault("_ai_mapped_targets", []).append({
+                        "target_id": target_id, "score": score_val, "reason": reason
+                    })
+                    logger.info(f"  [+] DB CONFIRMED -> Linked '{source_entity.get('_hve_id')}' → '{target_id}' (Score: {score_val})")
+                else:
+                    logger.warning(f"  [!] DB FAILED -> 0 rels: '{source_entity.get('_hve_id')}' → '{target_id}'")
+            except Exception as e:
+                logger.error(f"[RelationshipMappingNode] Write error: {e}")
+
+    return mapped_count, has_mapped
 
 
 @register_node
@@ -81,88 +317,94 @@ class RelationshipMappingNode(BaseNode):
     def execute(self, inputs: Dict[str, Any], config: Dict[str, Any]) -> NodeResult:
         logger.info("[RelationshipMappingNode] Node triggered. Execution started!")
 
-        # ── Cancellation handle injected by the engine ────────────────────────
-        # The engine calls cancel_event.set() the moment this node is re-triggered
-        # while already running. Every blocking section checks / respects it.
+        # ── Cancellation handle injected by the engine ─────────────────────────
         cancel_event: threading.Event = config.get("_cancel_event") or threading.Event()
+
+        # ── Parallelism ────────────────────────────────────────────────────────
+        # Controls how many entities are evaluated concurrently.
+        # Increase cautiously — higher values risk AI provider rate limits.
+        max_workers = int(config.get("parallelWorkers", _DEFAULT_WORKERS))
 
         source_val = inputs.get("source_entity")
         target_val = inputs.get("target_entity")
-        
+
         is_ui_preview = False
-        # Handle isolated UI preview runs
         if source_val is None and target_val is None and not inputs:
-            source_val = config.get("previewInput")
-            target_val = config.get("previewInput")
-            is_ui_preview = True
-            
+            logger.warning("[RelationshipMappingNode] Running in isolation without incoming execution payload. Database writes may fail if using un-ingested data.")
+
         source_fields = config.get("sourceFields", [])
         target_fields = config.get("targetFields", [])
         relation_type = config.get("relationType", "RELATES_TO")
         inter_relationship = config.get("interRelationship", False)
         min_score = float(config.get("minScore", 0.7))
         ignore_exact_matches = config.get("ignoreExactMatches", False)
-        logger.info("[RelationshipMappingNode] Configured relation_type: %s, source_fields: %s, target_fields: %s", relation_type, source_fields, target_fields)
+
+        logger.info("[RelationshipMappingNode] Configured relation_type: %s, source_fields: %s, target_fields: %s",
+                    relation_type, source_fields, target_fields)
+
         source_entities = source_val if isinstance(source_val, list) else ([source_val] if source_val else [])
-        
+
         if inter_relationship:
-            target_entities = source_entities
+            target_entities = source_entities.copy()
+            # If inter-relationship is ON but a target was also provided (e.g. a string target),
+            # combine them so the AI evaluates against BOTH peers and the explicit target.
+            if target_val:
+                t_val_list = target_val if isinstance(target_val, list) else [target_val]
+                target_entities.extend(t_val_list)
         else:
             target_entities = target_val if isinstance(target_val, list) else ([target_val] if target_val else [])
-        
-        # Validate required conditions before proceeding
+            
+        # Ensure all targets have an _hve_id for the AI to reference in its JSON response.
+        # This is crucial for "string targets" that only have { "text": "..." }.
+        for idx, t in enumerate(target_entities):
+            if isinstance(t, dict) and "_hve_id" not in t and "text" in t:
+                t["_hve_id"] = f"__string_target_{idx}__"
+
         ai_provider = config.get("aiProvider", "gemini")
         api_key = config.get("mistralApiKey") if ai_provider == "mistral" else config.get("geminiApiKey")
 
         is_valid = True
         if not api_key:
-            logger.warning(f"[RelationshipMappingNode] Missing {ai_provider.capitalize()} API Key. Skipping execution.")
+            logger.warning(f"[RelationshipMappingNode] Missing {ai_provider.capitalize()} API Key. Skipping.")
             is_valid = False
         elif not source_fields:
-            logger.warning("[RelationshipMappingNode] Missing source attributes. Skipping execution.")
+            logger.warning("[RelationshipMappingNode] Missing source attributes. Skipping.")
             is_valid = False
         elif not source_entities:
-            logger.warning("[RelationshipMappingNode] No source entities provided. Skipping execution.")
+            logger.warning("[RelationshipMappingNode] No source entities. Skipping.")
             is_valid = False
         elif not target_entities:
-            logger.warning("[RelationshipMappingNode] No target entities provided. Skipping execution.")
+            logger.warning("[RelationshipMappingNode] No target entities. Skipping.")
             is_valid = False
 
         if not is_valid or is_ui_preview:
             preview_payload = source_val if isinstance(source_val, (dict, list)) else {"result": source_val}
             if is_ui_preview:
-                logger.info("[RelationshipMappingNode] UI Preview mode detected. Skipping Neo4j and AI execution.")
+                logger.info("[RelationshipMappingNode] UI Preview mode. Skipping Neo4j and AI execution.")
             return NodeResult(
-                success=True, 
-                outputs={"data": source_val, "resolvedEntity": preview_payload}, 
+                success=True,
+                outputs={"data": source_val, "resolvedEntity": preview_payload},
                 metadata={"config_used": config, "skipped": True, "reason": "UI Preview or Invalid Config"}
             )
 
-        # 1. Query Neo4j to find entities lacking this outgoing relationship
         neo4j = get_neo4j_service()
-        # Sanitize the relation type to prevent Cypher injection
         safe_rel_type = "".join(c for c in relation_type if c.isalnum() or c == '_')
-        
-        # Attempt to extract the source_id from the incoming entities to scope the query
         source_id = source_entities[0].get("_source_id") if source_entities and isinstance(source_entities[0], dict) else None
-        
+
         missing_count = 0
         missing_ids = []
         processed_count = 0
-        
-        # --- Context-Aware Re-evaluation (Cache Invalidation) ---
-        # Generate a deterministic hash of the current node settings and target entities.
-        # If any of these change (e.g. new targets, different prompt/model), it automatically re-evaluates.
-        is_string_target = len(target_entities) == 1 and isinstance(target_entities[0], dict) and "text" in target_entities[0] and "_hve_id" not in target_entities[0]
-        
-        if is_string_target:
-            target_signature = [target_entities[0].get("text", "")]
-        else:
-            # Hash the unique Source IDs of the targets, NOT the individual row IDs.
-            # This prevents infinite cache-clearing loops when streaming data arrives,
-            # while still re-evaluating if the user connects an entirely different target node.
-            target_signature = sorted(list(set([str(t.get("_source_id", "unknown")) for t in target_entities if isinstance(t, dict)])))
-            
+
+        # ── Cache / signature ──────────────────────────────────────────────────
+        target_signature = []
+        for t in target_entities:
+            if isinstance(t, dict):
+                if str(t.get("_hve_id")).startswith("__string_target_"):
+                    target_signature.append(t.get("text", ""))
+                else:
+                    target_signature.append(str(t.get("_source_id", "unknown")))
+        target_signature = sorted(list(set(target_signature)))
+
         exec_signature = {
             "relationType": relation_type,
             "sourceFields": sorted(source_fields),
@@ -173,10 +415,8 @@ class RelationshipMappingNode(BaseNode):
             "ignoreExactMatches": ignore_exact_matches,
             "targetSources": target_signature
         }
-        
-        execution_hash = hashlib.md5(json.dumps(exec_signature, sort_keys=True).encode("utf-8")).hexdigest()
+        execution_hash = hashlib.md5(json.dumps(exec_signature, sort_keys=True).encode()).hexdigest()
 
-        # Initialize or reset local cache for this configuration if it doesn't exist
         if execution_hash not in _local_evaluation_cache:
             if _local_evaluation_cache:
                 logger.info("[RelationshipMappingNode] " + "="*65)
@@ -186,42 +426,15 @@ class RelationshipMappingNode(BaseNode):
                 logger.info("[RelationshipMappingNode] " + "="*65)
                 _local_evaluation_cache.clear()
             _local_evaluation_cache[execution_hash] = {"mapped": set(), "unmapped": set()}
-            
+
         current_cache = _local_evaluation_cache[execution_hash]
         already_evaluated = current_cache["mapped"].union(current_cache["unmapped"])
 
-        # We collect the IDs to have a list, and count them to know how many
-        if source_id:
-            query = f"""
-            MATCH (e:Entity)-[:PART_OF_SOURCE]->(s:Source {{source_id: $source_id}})
-            WHERE NOT (e)-[:{safe_rel_type}]->()
-            RETURN count(e) AS missing_count, collect(e._hve_id) AS missing_ids
-            """
-            
-            try:
-                db_results = neo4j.execute_query(query, {"source_id": source_id})
-                if db_results:
-                    missing_count = db_results[0].get("missing_count", 0)
-                    missing_ids = db_results[0].get("missing_ids", [])
-                    
-                    logger.info("[RelationshipMappingNode] Neo4j query results: missing_count=%d, missing_ids_sample=%s", missing_count, missing_ids[:5])
-                    
-                        
-                logger.info(f"[RelationshipMappingNode] Found {missing_count} entities missing the '{safe_rel_type}' relationship in Neo4j.")
-            except Exception as e:
-                logger.error(f"Failed to query Neo4j in RelationshipMappingNode: {e}")
-        else:
-            logger.warning("[RelationshipMappingNode] No '_source_id' found in source entities. Cannot scope Neo4j query. Skipping database lookup.")
-
-        # =========================================================================
-        # AI Relationship Evaluation
-        # =========================================================================
-        
-        # Filter source entities that are actually missing the relationship AND haven't been locally evaluated yet
-        if source_id and missing_ids:
-            missing_sources = [e for e in source_entities if isinstance(e, dict) and e.get("_hve_id") in missing_ids and e.get("_hve_id") not in already_evaluated]
-        else:
-            missing_sources = [e for e in source_entities if isinstance(e, dict) and e.get("_hve_id") not in already_evaluated]
+        # ── Build the work queue ───────────────────────────────────────────────
+        missing_sources = [
+            e for e in source_entities
+            if isinstance(e, dict) and e.get("_hve_id") not in already_evaluated
+        ]
 
         total_sources = len([e for e in source_entities if isinstance(e, dict)])
         evaluated_count = len([e for e in source_entities if isinstance(e, dict) and e.get("_hve_id") in already_evaluated])
@@ -229,9 +442,10 @@ class RelationshipMappingNode(BaseNode):
 
         logger.info("[RelationshipMappingNode] " + "-"*65)
         logger.info(f"[RelationshipMappingNode] 📊 ITERATION STATUS REPORT")
-        logger.info(f"[RelationshipMappingNode] Total source entities received: {total_sources}")
-        logger.info(f"[RelationshipMappingNode] Entities already evaluated (in cache): {evaluated_count}")
-        logger.info(f"[RelationshipMappingNode] Entities remaining to process: {to_process_count}")
+        logger.info(f"[RelationshipMappingNode] Total source entities       : {total_sources}")
+        logger.info(f"[RelationshipMappingNode] Already evaluated (cache)   : {evaluated_count}")
+        logger.info(f"[RelationshipMappingNode] Remaining to process        : {to_process_count}")
+        logger.info(f"[RelationshipMappingNode] Parallel workers            : {max_workers}")
         logger.info("[RelationshipMappingNode] " + "-"*65)
 
         if to_process_count == 0:
@@ -241,246 +455,112 @@ class RelationshipMappingNode(BaseNode):
         ai_inputs = []
         mapped_count = 0
         cancelled = False
+
         if missing_sources and target_entities:
-            logger.info(f"[RelationshipMappingNode] 🚀 STARTING BATCH: Evaluating {to_process_count} entities...")
-            ai_provider = config.get("aiProvider", "gemini")
+            logger.info(
+                f"[RelationshipMappingNode] 🚀 STARTING PARALLEL BATCH: "
+                f"{to_process_count} entities × {max_workers} workers"
+            )
             mistral_api_key = config.get("mistralApiKey")
-            mistral_model = config.get("mistralModel", "mistral-large-latest")
-            gemini_api_key = config.get("geminiApiKey")
-            gemini_model = config.get("geminiModel", "gemini-2.5-flash")
+            mistral_model   = config.get("mistralModel", "mistral-large-latest")
+            gemini_api_key  = config.get("geminiApiKey")
+            gemini_model    = config.get("geminiModel", "gemini-2.5-flash")
 
-            for idx, source_entity in enumerate(missing_sources, 1):
-                # ── Pre-call cancellation check ───────────────────────────────────
-                # The engine sets cancel_event the moment this node is re-triggered
-                # while already running. Abort before starting a new AI call.
-                if cancel_event.is_set():
-                    logger.warning(
-                        f"[RelationshipMappingNode] 🛑 Cancelled at entity {idx}/{to_process_count} "
-                        "(engine re-triggered node). Stopping batch."
-                    )
-                    cancelled = True
-                    break
+            # ── Shared kwargs for every worker ─────────────────────────────────
+            eval_kwargs = dict(
+                target_entities=target_entities,
+                target_fields=target_fields,
+                source_fields=source_fields,
+                is_string_target=False,  # Unused legacy parameter, left for backwards compat in signature
+                relation_type=relation_type,
+                safe_rel_type=safe_rel_type,
+                min_score=min_score,
+                ignore_exact_matches=ignore_exact_matches,
+                ai_provider=ai_provider,
+                mistral_api_key=mistral_api_key,
+                mistral_model=mistral_model,
+                gemini_api_key=gemini_api_key,
+                gemini_model=gemini_model,
+                cancel_event=cancel_event,
+            )
 
-                logger.info(f"[RelationshipMappingNode] ⏳ Processing entity {idx}/{to_process_count} (ID: {source_entity.get('_hve_id')})...")
-                source_entity["_ai_mapped_targets"] = source_entity.get("_ai_mapped_targets", [])
-                has_mapped = False
-                
-                def extract_fields(ent, fields):
-                    if not fields:
-                        # If no fields are specified, send the entire payload to the AI
-                        return ent
-                    return {k: v for k, v in ent.items() if k in fields or k == "_hve_id"}
-                    
-                source_payload = extract_fields(source_entity, source_fields)
-                
-                if is_string_target:
-                    target_payloads = target_entities[0]["text"]
-                else:
-                    # 2. Select up to 50 target entities
-                    valid_targets = [t for t in target_entities if isinstance(t, dict) and t.get("_hve_id") != source_entity.get("_hve_id")]
-                    sample_size = min(50, len(valid_targets))
-                    sample_targets = random.sample(valid_targets, sample_size)
-                    
-                    # 3. Extract requested fields to limit token usage and isolate context
-                    target_payloads = [extract_fields(t, target_fields) for t in sample_targets]
-                
-                # 4. Construct System Prompt & Payload
-                system_prompt = f"""You are an expert data analyst AI.
-Your task is to determine the likelihood of a '{relation_type}' relationship between a Source Entity and a list of Target Entities based on their attributes.
-For each Target Entity, provide a relationship score between 0.0 and 1.0 (where 1.0 is extremely likely) and a single-line reason.
-IMPORTANT: The "target_id" in your response MUST be the exact "_hve_id" value from the provided Target Entities. Do not use any other ID field.
-Output strictly in JSON format as a list of dictionaries with keys: "target_id", "score", "reason"."""
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rm_worker") as executor:
+                # Submit all entities at once; the pool throttles to max_workers active at a time
+                future_to_entity = {
+                    executor.submit(_evaluate_entity, entity, **eval_kwargs): entity
+                    for entity in missing_sources
+                }
 
-                user_prompt = f"Source Entity:\n{json.dumps(source_payload, indent=2)}\n\nTarget Entities:\n{json.dumps(target_payloads, indent=2)}"
-                ai_input = user_prompt
-                ai_inputs.append(ai_input)
-                
-                ai_response = None
-                
-                if ai_provider == "mistral":
-                    if mistral_api_key:
-                        logger.info(f"[RelationshipMappingNode] Sending source {source_entity.get('_hve_id')} to Mistral {mistral_model}...")
-                        try:
-                            url = "https://api.mistral.ai/v1/chat/completions"
-                            headers = {
-                                "Content-Type": "application/json",
-                                "Authorization": f"Bearer {mistral_api_key}"
-                            }
-                            data = {
-                                "model": mistral_model,
-                                "messages": [
-                                    {"role": "system", "content": system_prompt},
-                                    {"role": "user", "content": user_prompt}
-                                ]
-                            }
-                            
-                            resp, cancelled = _interruptible_post(url, headers, data, cancel_event)
-                            if cancelled:
-                                logger.warning(f"[RelationshipMappingNode] 🛑 Mistral call cancelled for entity {source_entity.get('_hve_id')}. Aborting batch.")
-                                break
-                            if resp and resp.ok:
-                                ai_text = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "[]")
-                                if ai_text.startswith("```json"):
-                                    ai_text = ai_text.strip("`").strip().removeprefix("json").strip()
-                                elif ai_text.startswith("```"):
-                                    ai_text = ai_text.strip("`").strip()
-                                ai_response = json.loads(ai_text)
-                                ai_responses.append(ai_response)
-                                logger.info(f"[RelationshipMappingNode] AI Output:\n{json.dumps(ai_response, indent=2)}")
-                            elif resp:
-                                logger.error(f"[RelationshipMappingNode] Mistral API Error: {resp.text}")
-                        except Exception as e:
-                            logger.error(f"[RelationshipMappingNode] Exception calling Mistral: {e}", exc_info=True)
+                completed = 0
+                for future in as_completed(future_to_entity):
+                    completed += 1
+                    entity, _has_mapped, was_cancelled, ai_response, ai_input = future.result()
+
+                    if was_cancelled:
+                        # Cancel all still-pending futures so idle workers don't start new calls
+                        cancelled = True
+                        for f in future_to_entity:
+                            f.cancel()
+                        logger.warning(
+                            f"[RelationshipMappingNode] 🛑 Cancel received — "
+                            f"stopped after {completed}/{to_process_count} entities completed."
+                        )
+                        break
+
+                    if ai_input:
+                        ai_inputs.append(ai_input)
+
+                    if ai_response and isinstance(ai_response, list):
+                        ai_responses.append(ai_response)
+                        # ── Write results to Neo4j immediately (don't batch wait) ──
+                        rel_count, has_mapped = _write_relationships(
+                            source_entity=entity,
+                            ai_response=ai_response,
+                            target_entities=target_entities,
+                            safe_rel_type=safe_rel_type,
+                            min_score=min_score,
+                            ignore_exact_matches=ignore_exact_matches,
+                            neo4j=neo4j,
+                        )
+                        mapped_count += rel_count
+
+                        if has_mapped:
+                            current_cache["mapped"].add(entity.get("_hve_id"))
+                        else:
+                            current_cache["unmapped"].add(entity.get("_hve_id"))
                     else:
-                        logger.warning("[RelationshipMappingNode] No Mistral API Key provided. Skipping AI call.")
-                else:
-                    if gemini_api_key:
-                        logger.info(f"[RelationshipMappingNode] Sending source {source_entity.get('_hve_id')} to {gemini_model}...")
-                        try:
-                            url = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent?key={gemini_api_key}"
-                            headers = {"Content-Type": "application/json"}
-                            data = {"system_instruction": {"parts": [{"text": system_prompt}]}, "contents": [{"parts": [{"text": user_prompt}]}], "generationConfig": {"response_mime_type": "application/json"}}
-                            
-                            resp, cancelled = _interruptible_post(url, headers, data, cancel_event)
-                            if cancelled:
-                                logger.warning(f"[RelationshipMappingNode] 🛑 Gemini call cancelled for entity {source_entity.get('_hve_id')}. Aborting batch.")
-                                break
-                            if resp and resp.ok:
-                                ai_text = resp.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "[]")
-                                ai_response = json.loads(ai_text)
-                                ai_responses.append(ai_response)
-                                logger.info(f"[RelationshipMappingNode] AI Output:\n{json.dumps(ai_response, indent=2)}")
-                            elif resp:
-                                logger.error(f"[RelationshipMappingNode] Gemini API Error: {resp.text}")
-                        except Exception as e:
-                            logger.error(f"[RelationshipMappingNode] Exception calling Gemini: {e}", exc_info=True)
-                    else:
-                        logger.warning("[RelationshipMappingNode] No Gemini API Key provided. Skipping AI call.")
-                        
-                # ── Post-call cancellation check ──────────────────────────────────
-                # The AI call may have taken 10-30s. If the engine signalled cancel
-                # during that time and _interruptible_post didn't catch it (e.g. the
-                # event was set exactly at the moment the response arrived), drop the
-                # result here before writing anything to Neo4j.
-                if cancel_event.is_set():
-                    logger.warning(
-                        f"[RelationshipMappingNode] 🛑 Cancel detected after AI response for entity "
-                        f"{source_entity.get('_hve_id')}. Discarding result — not writing to Neo4j."
-                    )
-                    cancelled = True
-                    break
+                        current_cache["unmapped"].add(entity.get("_hve_id"))
 
-                # =========================================================================
-                # Write high-scoring relationships back to Neo4j
-                # =========================================================================
-                if ai_response and isinstance(ai_response, list):
-                    for item in ai_response:
-                        target_id = item.get("target_id")
-                        score = item.get("score", 0.0)
-                        reason = item.get("reason", "")
-                        
-                        try:
-                            score_val = float(score)
-                            if score_val < 0.0 or score_val > 1.0:
-                                score_val = 0.0
-                        except (ValueError, TypeError):
-                            score_val = 0.0
-                            
-                        # Create the edge if the AI is confident enough based on settings (and check exact match rule)
-                        is_exact_match = (score_val == 1.0)
-                        should_create = (score_val >= min_score) and not (ignore_exact_matches and is_exact_match)
-                        
-                        if is_string_target and should_create:
-                            target_text = target_entities[0].get("text", "")
-                            cypher = f"""
-                            MATCH (s:Entity {{ _hve_id: $source_id }})
-                            MERGE (t:Entity:Concept {{ text: $target_text }})
-                            ON CREATE SET t._hve_id = randomUUID(), t._source_id = 'user_string'
-                            WITH s, t
-                            MERGE (src:Source {{ source_id: 'user_string' }})
-                            MERGE (t)-[:PART_OF_SOURCE]->(src)
-                            MERGE (s)-[r:{safe_rel_type}]->(t)
-                            SET r.score = $score, r.reason = $reason, r.ai_generated = true
-                            """
-                            try:
-                                summary = neo4j.execute_write(cypher, {
-                                    "source_id": source_entity.get("_hve_id"),
-                                    "target_text": target_text,
-                                    "score": score_val,
-                                    "reason": reason
-                                })
-                                if summary and getattr(summary.counters, 'relationships_created', 0) > 0:
-                                    mapped_count += 1
-                                    has_mapped = True
-                                    source_entity["_ai_mapped_targets"].append({
-                                        "target_text": target_text,
-                                        "score": score_val,
-                                        "reason": reason
-                                    })
-                                    logger.info(f"  [+] DB CONFIRMED -> Linked '{source_entity.get('_hve_id')}' to Concept '{target_text}' (Score: {score_val}). Nodes created: {getattr(summary.counters, 'nodes_created', 0)}")
-                                else:
-                                    logger.warning(f"  [!] DB FAILED -> 0 relationships created! Could not find source '{source_entity.get('_hve_id')}' in Neo4j.")
-                            except Exception as e:
-                                logger.error(f"[RelationshipMappingNode] Failed to write string relationship to Neo4j: {e}")
-                        elif not is_string_target and target_id and should_create:
-                            cypher = f"""
-                            MATCH (s:Entity {{ _hve_id: $source_id }})
-                            MATCH (t:Entity {{ _hve_id: $target_id }})
-                            MERGE (s)-[r:{safe_rel_type}]->(t)
-                            SET r.score = $score, r.reason = $reason, r.ai_generated = true
-                            """
-                            try:
-                                summary = neo4j.execute_write(cypher, {
-                                    "source_id": source_entity.get("_hve_id"),
-                                    "target_id": target_id,
-                                    "score": score_val,
-                                    "reason": reason
-                                })
-                                if summary and getattr(summary.counters, 'relationships_created', 0) > 0:
-                                    mapped_count += 1
-                                    has_mapped = True
-                                    source_entity["_ai_mapped_targets"].append({
-                                        "target_id": target_id,
-                                        "score": score_val,
-                                        "reason": reason
-                                    })
-                                    logger.info(f"  [+] DB CONFIRMED -> Linked '{source_entity.get('_hve_id')}' to target '{target_id}' (Score: {score_val})")
-                                else:
-                                    logger.warning(f"  [!] DB FAILED -> 0 relationships created! Could not match IDs: '{source_entity.get('_hve_id')}' -> '{target_id}'")
-                            except Exception as e:
-                                logger.error(f"[RelationshipMappingNode] Failed to write relationship to Neo4j: {e}")
-                                
-                # Maintain local storage for mapped and unmapped entities to prevent infinite loops
-                # without modifying the underlying Neo4j nodes.
-                if has_mapped:
-                    current_cache["mapped"].add(source_entity.get("_hve_id"))
-                else:
-                    current_cache["unmapped"].add(source_entity.get("_hve_id"))
-                
-                processed_count += 1
+                    processed_count += 1
 
             if cancelled:
                 logger.info("[RelationshipMappingNode] " + "-"*65)
-                logger.info(f"[RelationshipMappingNode] ⚡ BATCH CANCELLED: Processed {processed_count}/{to_process_count} entities before cancel signal. Engine will re-run with updated settings.")
+                logger.info(
+                    f"[RelationshipMappingNode] ⚡ BATCH CANCELLED: "
+                    f"Processed {processed_count}/{to_process_count} entities. "
+                    "Engine will re-run with updated settings."
+                )
                 logger.info("[RelationshipMappingNode] " + "-"*65)
             else:
                 logger.info("[RelationshipMappingNode] " + "-"*65)
-                logger.info(f"[RelationshipMappingNode] ✅ BATCH COMPLETE: Evaluated {processed_count} entities, created {mapped_count} '{safe_rel_type}' relationships.")
+                logger.info(
+                    f"[RelationshipMappingNode] ✅ BATCH COMPLETE: "
+                    f"Evaluated {processed_count} entities, "
+                    f"created {mapped_count} '{safe_rel_type}' relationships."
+                )
                 logger.info("[RelationshipMappingNode] " + "-"*65)
 
         else:
             logger.warning("[RelationshipMappingNode] Missing valid source or target entities. Skipping AI evaluation.")
-            
-        # Output the source_entities carrying the newly appended relationships forward
+
         result_payload = source_entities if isinstance(source_val, list) else (source_entities[0] if source_entities else None)
-            
         preview_payload = result_payload if isinstance(result_payload, (dict, list)) else {"result": result_payload}
-        
+
         return NodeResult(
             success=True,
             outputs={
-                "data": result_payload,             # MUST be "data" for downstream
-                "resolvedEntity": preview_payload   # MUST exist for UI properties panel
+                "data": result_payload,
+                "resolvedEntity": preview_payload
             },
             metadata={
                 "config_used": config,
@@ -490,6 +570,7 @@ Output strictly in JSON format as a list of dictionaries with keys: "target_id",
                 "processed_count": processed_count,
                 "mapped_count": mapped_count,
                 "cancelled": cancelled,
+                "parallel_workers": max_workers,
                 "ai_input_prompt": ai_inputs,
                 "ai_output_response": ai_responses
             }
