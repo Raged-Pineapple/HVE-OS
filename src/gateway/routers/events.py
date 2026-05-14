@@ -19,6 +19,10 @@ clients_lock = asyncio.Lock()
 
 _engine_loop = None
 
+# Per-node cancel signals: when settings change mid-run, the engine sets
+# the event so the node's inner for-loop can abort the current batch early.
+_node_cancel_events = {}  # node_id -> threading.Event
+
 
 def _dump_json(message: dict) -> str:
     """Helper to safely JSON dump massive objects off the main thread."""
@@ -92,14 +96,26 @@ class ReactiveGraphEngine:
         self.dirty_flags[node_id] = True
         if not self.running.get(node_id, False):
             asyncio.create_task(self._run_node_task(node_id))
+        else:
+            # Node is already running a batch — signal it to abort the current
+            # for-loop iteration early so it can re-run with the new settings.
+            cancel_event = _node_cancel_events.get(node_id)
+            if cancel_event:
+                cancel_event.set()
+                logger.info(f"[Engine] ⚡ Cancel signal sent to running node '{node_id}' (settings changed mid-batch).")
 
     async def _run_node_task(self, node_id):
         """The independent Debounce Loop. A node processes itself until it is no longer dirty."""
+        import threading
         from Logic.nodes.registry import execute_node
+        
+        cancel_event = threading.Event()
+        _node_cancel_events[node_id] = cancel_event
         self.running[node_id] = True
         try:
             while self.dirty_flags.get(node_id, False):
                 self.dirty_flags[node_id] = False
+                cancel_event.clear()  # Reset abort signal for this fresh iteration
                 
                 if node_id not in self.nodes:
                     break  # Node was deleted from canvas mid-run
@@ -107,7 +123,7 @@ class ReactiveGraphEngine:
                 node = self.nodes[node_id]
                 inputs = {}
                 
-                # 1. Gather freshest inputs from upstream bounds
+                # 1. Gather freshest inputs from upstream nodes
                 incoming_edges = [e for e in self.edges if e.get('target') == node_id]
                 for edge in incoming_edges:
                     src_id = edge.get('source')
@@ -119,10 +135,16 @@ class ReactiveGraphEngine:
                         inputs[tgt_handle] = src_outputs[src_handle]
                     elif 'data' in src_outputs:
                         inputs[tgt_handle] = src_outputs['data']
+                
+                # Inject the cancel signal into config so long-running nodes
+                # (e.g. RelationshipMappingNode) can abort their inner for-loop
+                # early when settings change mid-batch.
+                node_config = dict(node.get('data', {}))
+                node_config['_cancel_event'] = cancel_event
                         
                 try:
                     # 2. Execute Python logic off the main thread
-                    result = await asyncio.to_thread(execute_node, node.get('type'), inputs, node.get('data', {}))
+                    result = await asyncio.to_thread(execute_node, node.get('type'), inputs, node_config)
                     
                     if result and result.success and result.outputs:
                         output_hash = await asyncio.to_thread(_hash_outputs, result.outputs)
@@ -150,6 +172,7 @@ class ReactiveGraphEngine:
                     })
         finally:
             self.running[node_id] = False
+            _node_cancel_events.pop(node_id, None)
 
 
 engine = ReactiveGraphEngine()
