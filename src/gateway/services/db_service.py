@@ -10,13 +10,18 @@ from datetime import datetime
 import psycopg2
 from psycopg2.pool import ThreadedConnectionPool
 from psycopg2.extras import RealDictCursor
+from dotenv import load_dotenv
+
+# Force load .env right here so there is ZERO chance it's missed by import order
+_env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env"))
+load_dotenv(dotenv_path=_env_path)
 
 logger = logging.getLogger(__name__)
 
 # Database configuration
 DB_CONFIG = {
-    "host": os.getenv("POSTGRES_HOST", "localhost"),
-    "port": int(os.getenv("POSTGRES_PORT", "5432")),
+    "host": os.getenv("POSTGRES_HOST", "127.0.0.1"),
+    "port": int(os.getenv("DB_PORT", "5433")),
     "database": os.getenv("POSTGRES_DB", "hve_control_plane"),
     "user": os.getenv("POSTGRES_USER", "hve_admin"),
     "password": os.getenv("POSTGRES_PASSWORD", "hve_password123"),

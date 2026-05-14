@@ -13,6 +13,11 @@ import json
 import logging
 import asyncio
 import aiohttp
+from dotenv import load_dotenv
+
+# Load variables from .env to override hardcoded ports
+_env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
+load_dotenv(dotenv_path=_env_path)
 
 # Add gateway and src to path for imports
 _gateway_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "gateway"))
