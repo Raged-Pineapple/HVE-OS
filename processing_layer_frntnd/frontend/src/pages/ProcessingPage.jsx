@@ -23,8 +23,13 @@ const getId = () => `node_${crypto.randomUUID()}`;
 const LogicGraphTab = () => {
   const reactFlowWrapper = useRef(null);
   const wsRef = useRef(null);
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+
+  // Load persisted graph state from local browser storage to survive reloads
+  const initialNodes = JSON.parse(localStorage.getItem('hve_os_logic_graph_nodes') || '[]');
+  const initialEdges = JSON.parse(localStorage.getItem('hve_os_logic_graph_edges') || '[]');
+
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const [reactFlowInstance, setReactFlowInstance] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -148,21 +153,32 @@ const LogicGraphTab = () => {
     };
   }, [setNodes]);
 
-  // Automatically sync graph logical structure to backend whenever it changes
+  // Automatically persist graph to local storage and sync to backend
   useEffect(() => {
-    if (!isWsConnected) return;
-
     const extractConfigData = (data) => {
       // Strip out execution results so we only track configuration changes.
       // This prevents infinite loops when the backend sends us data updates.
-      const { keys, count, data: outputData, _executionMetadata, error, success, ...config } = data;
+      const { keys, count, data: outputData, previewInput, _executionMetadata, error, success, ...config } = data || {};
       return config;
     };
 
-    const graphNodes = nodes.map(n => ({
+    // 1. Prepare data for localStorage (needs position data, but no execution data)
+    const storageNodes = nodes.map(n => ({
+      ...n,
+      data: extractConfigData(n.data)
+    }));
+    
+    // Save locally
+    localStorage.setItem('hve_os_logic_graph_nodes', JSON.stringify(storageNodes));
+    localStorage.setItem('hve_os_logic_graph_edges', JSON.stringify(edges));
+
+    // 2. Prepare data for backend sync (doesn't need positions, just logical flow)
+    if (!isWsConnected) return;
+
+    const graphNodes = storageNodes.map(n => ({
       id: n.id,
       type: n.type,
-      data: extractConfigData(n.data)
+      data: n.data
     }));
     
     const graphEdges = edges.map(e => ({

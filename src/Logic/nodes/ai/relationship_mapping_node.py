@@ -203,6 +203,7 @@ def _write_relationships(
     min_score: float,
     ignore_exact_matches: bool,
     neo4j,
+    is_ui_preview: bool = False,
 ) -> Tuple[int, bool]:
     """
     Write AI-scored relationships to Neo4j for a single source entity.
@@ -237,12 +238,23 @@ def _write_relationships(
                     break
 
         status_emoji = "✅ APPROVED" if should_create else "❌ REJECTED"
-        logger.info(
-            f"[RelationshipMappingNode] 🧠 AI Score: {score_val:.2f} | {status_emoji} | "
-            f"[{source_entity.get('_hve_id')}] → [{target_display}] | Reason: {reason}"
-        )
+        
+        # Only log evaluations for user string targets to reduce terminal noise
+        if str(target_id).startswith("__string_target_"):
+            logger.info(
+                f"[RelationshipMappingNode] 🧠 AI Score: {score_val:.2f} | {status_emoji} | "
+                f"[{source_entity.get('_hve_id')}] → [{target_display}] | Reason: {reason}"
+            )
 
         if str(target_id).startswith("__string_target_") and should_create:
+            if is_ui_preview:
+                mapped_count += 1
+                has_mapped = True
+                source_entity.setdefault("_ai_mapped_targets", []).append({
+                    "target_text": target_text, "score": score_val, "reason": reason, "relation_type": safe_rel_type
+                })
+                logger.info(f"  [+] UI PREVIEW -> Skipped DB write for '{source_entity.get('_hve_id')}' to Concept '{target_text}'")
+                continue
                     
             cypher = f"""
             MATCH (s:Entity {{ _hve_id: $source_id }})
@@ -253,49 +265,62 @@ def _write_relationships(
             MERGE (t)-[:PART_OF_SOURCE]->(src)
             MERGE (s)-[r:{safe_rel_type}]->(t)
             SET r.score = $score, r.reason = $reason, r.ai_generated = true
+            RETURN count(r) as rel_count
             """
             try:
-                summary = neo4j.execute_write(cypher, {
+                records = neo4j.execute_query(cypher, {
                     "source_id": source_entity.get("_hve_id"),
                     "target_text": target_text,
                     "score": score_val,
                     "reason": reason
                 })
-                if summary and getattr(summary.counters, 'relationships_created', 0) > 0:
+                rel_count = records[0]["rel_count"] if records else 0
+                if rel_count > 0:
                     mapped_count += 1
                     has_mapped = True
                     source_entity.setdefault("_ai_mapped_targets", []).append({
-                        "target_text": target_text, "score": score_val, "reason": reason
+                        "target_text": target_text, "score": score_val, "reason": reason, "relation_type": safe_rel_type
                     })
                     logger.info(f"  [+] DB CONFIRMED -> Linked '{source_entity.get('_hve_id')}' to Concept '{target_text}' (Score: {score_val})")
                 else:
-                    logger.warning(f"  [!] DB FAILED -> 0 rels created for '{source_entity.get('_hve_id')}' → '{target_text}'")
+                    logger.warning(f"  [!] DB FAILED -> Source not found in DB for '{source_entity.get('_hve_id')}'")
             except Exception as e:
                 logger.error(f"[RelationshipMappingNode] Write error (string target): {e}")
 
         elif target_id and should_create:
+            if is_ui_preview:
+                mapped_count += 1
+                has_mapped = True
+                source_entity.setdefault("_ai_mapped_targets", []).append({
+                    "target_id": target_id, "score": score_val, "reason": reason, "relation_type": safe_rel_type
+                })
+                logger.info(f"  [+] UI PREVIEW -> Skipped DB write for '{source_entity.get('_hve_id')}' → '{target_id}'")
+                continue
+
             cypher = f"""
             MATCH (s:Entity {{ _hve_id: $source_id }})
             MATCH (t:Entity {{ _hve_id: $target_id }})
             MERGE (s)-[r:{safe_rel_type}]->(t)
             SET r.score = $score, r.reason = $reason, r.ai_generated = true
+            RETURN count(r) as rel_count
             """
             try:
-                summary = neo4j.execute_write(cypher, {
+                records = neo4j.execute_query(cypher, {
                     "source_id": source_entity.get("_hve_id"),
                     "target_id": target_id,
                     "score": score_val,
                     "reason": reason
                 })
-                if summary and getattr(summary.counters, 'relationships_created', 0) > 0:
+                rel_count = records[0]["rel_count"] if records else 0
+                if rel_count > 0:
                     mapped_count += 1
                     has_mapped = True
                     source_entity.setdefault("_ai_mapped_targets", []).append({
-                        "target_id": target_id, "score": score_val, "reason": reason
+                        "target_id": target_id, "score": score_val, "reason": reason, "relation_type": safe_rel_type
                     })
                     logger.info(f"  [+] DB CONFIRMED -> Linked '{source_entity.get('_hve_id')}' → '{target_id}' (Score: {score_val})")
                 else:
-                    logger.warning(f"  [!] DB FAILED -> 0 rels: '{source_entity.get('_hve_id')}' → '{target_id}'")
+                    logger.warning(f"  [!] DB FAILED -> Source or Target not found in DB: '{source_entity.get('_hve_id')}' → '{target_id}'")
             except Exception as e:
                 logger.error(f"[RelationshipMappingNode] Write error: {e}")
 
@@ -330,7 +355,10 @@ class RelationshipMappingNode(BaseNode):
 
         is_ui_preview = False
         if source_val is None and target_val is None and not inputs:
-            logger.warning("[RelationshipMappingNode] Running in isolation without incoming execution payload. Database writes may fail if using un-ingested data.")
+            logger.warning("[RelationshipMappingNode] Running in isolation without incoming execution payload. Falling back to UI preview data.")
+            source_val = config.get("previewInput")
+            target_val = config.get("previewInput")
+            is_ui_preview = True
 
         source_fields = config.get("sourceFields", [])
         target_fields = config.get("targetFields", [])
@@ -377,14 +405,12 @@ class RelationshipMappingNode(BaseNode):
             logger.warning("[RelationshipMappingNode] No target entities. Skipping.")
             is_valid = False
 
-        if not is_valid or is_ui_preview:
+        if not is_valid:
             preview_payload = source_val if isinstance(source_val, (dict, list)) else {"result": source_val}
-            if is_ui_preview:
-                logger.info("[RelationshipMappingNode] UI Preview mode. Skipping Neo4j and AI execution.")
             return NodeResult(
                 success=True,
-                outputs={"data": source_val, "resolvedEntity": preview_payload},
-                metadata={"config_used": config, "skipped": True, "reason": "UI Preview or Invalid Config"}
+                outputs={"data": [], "resolvedEntity": preview_payload},
+                metadata={"config_used": config, "skipped": True, "reason": "Invalid Config"}
             )
 
         neo4j = get_neo4j_service()
@@ -521,6 +547,7 @@ class RelationshipMappingNode(BaseNode):
                             min_score=min_score,
                             ignore_exact_matches=ignore_exact_matches,
                             neo4j=neo4j,
+                            is_ui_preview=is_ui_preview,
                         )
                         mapped_count += rel_count
 
@@ -553,8 +580,51 @@ class RelationshipMappingNode(BaseNode):
         else:
             logger.warning("[RelationshipMappingNode] Missing valid source or target entities. Skipping AI evaluation.")
 
-        result_payload = source_entities if isinstance(source_val, list) else (source_entities[0] if source_entities else None)
-        preview_payload = result_payload if isinstance(result_payload, (dict, list)) else {"result": result_payload}
+        # Collect the user-typed string concept texts from the target entities list.
+        # These are the ONLY targets that make sense for downstream Cypher queries.
+        string_target_texts = [
+            t.get("text", "")
+            for t in target_entities
+            if isinstance(t, dict) and str(t.get("_hve_id", "")).startswith("__string_target_") and t.get("text")
+        ]
+
+        # Build deduplicated output: only relation_type + confirmed string target_text.
+        # Peer entity UUIDs are explicitly excluded.
+        seen = set()
+        simplified_payload = []
+        for e in source_entities:
+            for t in e.get("_ai_mapped_targets", []):
+                rel = t.get("relation_type") or safe_rel_type
+                txt = t.get("target_text", "")   # only populated for string targets
+                if not txt:
+                    continue                      # skip peer entity UUID targets
+                key = (rel, txt)
+                if key not in seen:
+                    seen.add(key)
+                    simplified_payload.append({
+                        "relation_type": rel,
+                        "target_text": txt,
+                        "score": t.get("score", 0.0),
+                        "_ai_mapped_targets": [t]
+                    })
+
+        # Guarantee at least one record per string target so the Risk Calculator
+        # always has something to work with, even when the AI found no matches yet.
+        for st in string_target_texts:
+            key = (safe_rel_type, st)
+            if key not in seen:
+                seen.add(key)
+                simplified_payload.append({
+                    "relation_type": safe_rel_type,
+                    "target_text": st,
+                    "score": 0.0,
+                    "_ai_mapped_targets": []
+                })
+                logger.info(f"[RelationshipMappingNode] 📌 Guaranteed fallback record: [{safe_rel_type}] → '{st}'")
+
+        logger.info(f"[RelationshipMappingNode] Output payload: {len(simplified_payload)} unique (relation_type, target_text) pairs.")
+        result_payload = simplified_payload
+        preview_payload = result_payload
 
         return NodeResult(
             success=True,

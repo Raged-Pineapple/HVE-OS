@@ -133,29 +133,54 @@ class GraphExecutor:
 
             target_handle = edge.target_handle
             source_handle = edge.source_handle
+
+            # Normalize null/None handles → "data" so downstream nodes always
+            # receive inputs under a predictable key name.
+            if not target_handle or target_handle == "null":
+                target_handle = "data"
+            if not source_handle or source_handle == "null":
+                source_handle = "data"
             
             logger.info(f"  Edge: source={edge.source} -> target={edge.target}")
             logger.info(f"    sourceHandle='{source_handle}', targetHandle='{target_handle}'")
             logger.info(f"  Source outputs keys: {list(source_result.outputs.keys())}")
             logger.info(f"  Source 'data' type: {type(source_result.outputs.get('data'))}")
             
+            value_to_map = None
+
             # First, try to get exact output matching the source handle
             if source_handle and source_handle in source_result.outputs:
-                inputs[target_handle] = source_result.outputs[source_handle]
+                value_to_map = source_result.outputs[source_handle]
                 logger.info(f"  ✓ Mapped by source_handle '{source_handle}' -> target '{target_handle}'")
-                logger.info(f"    value type: {type(inputs[target_handle])}")
             # Fallback: try to use 'data' output
             elif "data" in source_result.outputs:
-                inputs[target_handle] = source_result.outputs["data"]
+                value_to_map = source_result.outputs["data"]
                 logger.info(f"  ✓ Fallback: mapped 'data' -> target '{target_handle}'")
-                logger.info(f"    value type: {type(inputs[target_handle])}")
             # Fallback: use any available output
             elif source_result.outputs:
                 first_output_key = list(source_result.outputs.keys())[0]
-                inputs[target_handle] = source_result.outputs[first_output_key]
+                value_to_map = source_result.outputs[first_output_key]
                 logger.info(f"  ✓ Fallback2: mapped '{first_output_key}' -> target '{target_handle}'")
             else:
                 logger.warning(f"  ✗ No outputs to map from source {edge.source}")
+
+            if value_to_map is not None:
+                if target_handle not in inputs:
+                    # Initialize as a list if we know it's going to be aggregated, or just take the value
+                    inputs[target_handle] = value_to_map
+                else:
+                    # If there's already a value, we must aggregate them.
+                    # Convert the existing value to a list if it isn't one.
+                    if not isinstance(inputs[target_handle], list):
+                        inputs[target_handle] = [inputs[target_handle]]
+                    
+                    # Extend or append the new value
+                    if isinstance(value_to_map, list):
+                        inputs[target_handle].extend(value_to_map)
+                    else:
+                        inputs[target_handle].append(value_to_map)
+                
+                logger.info(f"    current value type for '{target_handle}': {type(inputs[target_handle])}")
 
         return inputs
 

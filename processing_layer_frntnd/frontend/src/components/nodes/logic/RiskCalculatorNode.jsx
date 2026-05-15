@@ -1,6 +1,6 @@
 import React, { memo, useState, useEffect, useRef } from 'react';
 import { Handle, Position } from 'reactflow';
-import { AlertTriangle, Pin, PinOff, Search } from 'lucide-react';
+import { AlertTriangle, Pin, PinOff, Search, ChevronDown, ChevronRight } from 'lucide-react';
 import BaseNode from '../BaseNode';
 
 const getEntityName = (entity, displayProperty) => {
@@ -33,6 +33,7 @@ export const config = {
   SettingsForm: ({ nodeId, formData, handleChange, nodes, edges }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [activeTab, setActiveTab] = useState('all');
+    const [expandedEntities, setExpandedEntities] = useState(new Set());
     const prevPropRef = useRef(formData.displayNameProperty);
 
     useEffect(() => {
@@ -75,14 +76,14 @@ export const config = {
     const mediumRisk = Array.isArray(formData.medium_risk) ? formData.medium_risk : [];
     const lowRisk = Array.isArray(formData.low_risk) ? formData.low_risk : [];
 
-    const tabs = [
+    const riskTabs = [
       { key: 'all', label: 'All Data', data: allData, color: 'var(--text-primary)' },
       { key: 'high', label: 'High', data: highRisk, color: '#EF4444' },
       { key: 'medium', label: 'Medium', data: mediumRisk, color: '#F59E0B' },
       { key: 'low', label: 'Low', data: lowRisk, color: '#10B981' }
     ];
 
-    const activeData = tabs.find(t => t.key === activeTab)?.data || [];
+    const activeData = riskTabs.find(t => t.key === activeTab)?.data || [];
     const filteredData = activeData.filter(e => getEntityName(e, formData.displayNameProperty).toLowerCase().includes(searchTerm.toLowerCase()));
 
     return (
@@ -95,6 +96,21 @@ export const config = {
             onChange={(e) => handleChange('targetField', e.target.value)}
             style={{ width: '100%', padding: '6px 8px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 6, color: 'var(--text-primary)', fontSize: '0.8rem' }}
             placeholder="e.g. risk_score"
+          />
+        </div>
+
+        <div>
+          <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Analysis Depth (Max Hops)</label>
+          <input 
+            type="number" 
+            min="1"
+            max="10"
+            value={formData.maxHops ?? 3}
+            onChange={(e) => {
+              const val = e.target.value;
+              handleChange('maxHops', val === '' ? '' : parseInt(val, 10));
+            }}
+            style={{ width: '100%', padding: '6px 8px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 6, color: 'var(--text-primary)', fontSize: '0.8rem' }}
           />
         </div>
 
@@ -114,7 +130,7 @@ export const config = {
 
         <div style={{ marginTop: 8, borderTop: '1px solid var(--border-subtle)', paddingTop: 12 }}>
           <div style={{ display: 'flex', gap: 4, marginBottom: 12, borderBottom: '1px solid var(--border-subtle)' }}>
-            {tabs.map(tab => (
+            {riskTabs.map(tab => (
               <div
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
@@ -166,28 +182,121 @@ export const config = {
             {filteredData.map((entity, idx) => {
               const name = getEntityName(entity, formData.displayNameProperty);
               const isPinned = (formData.pinnedEntities || []).includes(name);
+              const trace = entity._path_trace || [];
+              const isExpanded = expandedEntities.has(name);
+              
               return (
-                <div 
-                  key={`pin-${idx}-${name}`} 
-                  onClick={() => {
-                    const currentPinned = formData.pinnedEntities || [];
-                    if (isPinned) {
-                      handleChange('pinnedEntities', currentPinned.filter(n => n !== name));
-                    } else {
-                      handleChange('pinnedEntities', [...currentPinned, name]);
-                    }
-                  }}
-                  style={{ 
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: '0.7rem', 
-                    color: isPinned ? 'var(--cyan)' : 'var(--text-primary)', 
-                    cursor: 'pointer', padding: '6px 10px', borderRadius: 6,
-                    background: isPinned ? 'rgba(59, 130, 246, 0.08)' : 'var(--bg-surface)',
-                    border: `1px solid ${isPinned ? 'var(--cyan)' : 'var(--border-subtle)'}`,
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: isPinned ? 600 : 400 }}>{name}</span>
-                  {isPinned ? <Pin size={12} fill="var(--cyan)" color="var(--cyan)" style={{ flexShrink: 0 }} /> : <PinOff size={12} color="var(--text-muted)" style={{ flexShrink: 0, opacity: 0.5 }} />}
+                <div key={`pin-${idx}-${name}`} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div 
+                    style={{ 
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: '0.7rem', 
+                      color: isPinned ? 'var(--cyan)' : 'var(--text-primary)', 
+                      padding: '6px 10px', borderRadius: 6,
+                      background: isPinned ? 'rgba(59, 130, 246, 0.08)' : 'var(--bg-surface)',
+                      border: `1px solid ${isPinned ? 'var(--cyan)' : 'var(--border-subtle)'}`,
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <div 
+                      onClick={() => {
+                        const newExpanded = new Set(expandedEntities);
+                        if (isExpanded) newExpanded.delete(name);
+                        else newExpanded.add(name);
+                        setExpandedEntities(newExpanded);
+                      }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, cursor: 'pointer', overflow: 'hidden' }}
+                    >
+                      {trace.length > 0 ? (
+                        isExpanded ? <ChevronDown size={14} color="var(--text-muted)" style={{ flexShrink: 0 }} /> : <ChevronRight size={14} color="var(--text-muted)" style={{ flexShrink: 0 }} />
+                      ) : (
+                        <div style={{ width: 14, height: 14, flexShrink: 0 }} />
+                      )}
+                      
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: isPinned ? 600 : 400 }}>
+                        {name}
+                        {entity._risk_score !== undefined && (
+                          <span style={{ marginLeft: 8, fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                            Risk: {entity._risk_score} (Base: {entity._base_score})
+                          </span>
+                        )}
+                      </span>
+                    </div>
+
+                    <div 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const currentPinned = formData.pinnedEntities || [];
+                        if (isPinned) {
+                          handleChange('pinnedEntities', currentPinned.filter(n => n !== name));
+                        } else {
+                          handleChange('pinnedEntities', [...currentPinned, name]);
+                        }
+                      }}
+                      style={{ cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
+                    >
+                      {isPinned ? <Pin size={12} fill="var(--cyan)" color="var(--cyan)" /> : <PinOff size={12} color="var(--text-muted)" style={{ opacity: 0.5 }} />}
+                    </div>
+                  </div>
+                  
+                  {isExpanded && trace.length > 0 && (
+                    <div style={{ 
+                      padding: '8px 10px', 
+                      background: 'var(--bg-elevated)', 
+                      borderRadius: 6, 
+                      borderLeft: '2px solid var(--cyan)',
+                      borderRight: '1px solid var(--border-subtle)',
+                      borderTop: '1px solid var(--border-subtle)',
+                      borderBottom: '1px solid var(--border-subtle)',
+                      fontSize: '0.65rem',
+                      display: 'flex', 
+                      flexDirection: 'column', 
+                      gap: 8,
+                      marginBottom: 8,
+                      marginLeft: 14
+                    }}>
+                      <div style={{ color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border-subtle)', paddingBottom: 4 }}>Path Trace Analysis</div>
+                      {trace.map((step, sIdx) => (
+                        <div key={sIdx} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-primary)' }}>
+                            <span style={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4 }}>
+                              <span style={{ color: 'var(--cyan)' }}>[{step.step}]</span>
+                              {step.relation}
+                            </span>
+                            <span style={{ color: step.score > 70 ? '#EF4444' : step.score > 35 ? '#F59E0B' : '#10B981', fontWeight: 600 }}>
+                              {step.score}%
+                            </span>
+                          </div>
+                          <div style={{ color: 'var(--text-muted)', fontStyle: 'italic', paddingLeft: 16 }}>
+                            ↳ {step.from}
+                          </div>
+                          {step.reason && (
+                            <div style={{ color: 'var(--text-muted)', paddingLeft: 16, marginTop: 2, lineHeight: 1.3 }}>
+                              {step.reason}
+                            </div>
+                          )}
+                          {(step.src_node || step.tgt_node) && (
+                            <details style={{ paddingLeft: 16, marginTop: 4 }}>
+                              <summary style={{ cursor: 'pointer', fontSize: '0.55rem', color: 'var(--cyan)', outline: 'none' }}>View Node Attributes</summary>
+                              <div style={{ marginTop: 4, padding: 6, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 4, fontSize: '0.55rem', fontFamily: 'monospace', overflowX: 'auto' }}>
+                                {step.src_node && (
+                                  <div style={{ marginBottom: 6 }}>
+                                    <strong style={{ color: 'var(--text-primary)', display: 'block', marginBottom: 2 }}>Source Node:</strong>
+                                    <pre style={{ margin: 0, color: 'var(--text-primary)' }}>{JSON.stringify(step.src_node, null, 2)}</pre>
+                                  </div>
+                                )}
+                                {step.tgt_node && (
+                                  <div>
+                                    <strong style={{ color: 'var(--text-primary)', display: 'block', marginBottom: 2 }}>Target Node:</strong>
+                                    <pre style={{ margin: 0, color: 'var(--text-primary)' }}>{JSON.stringify(step.tgt_node, null, 2)}</pre>
+                                  </div>
+                                )}
+                              </div>
+                            </details>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -242,9 +351,38 @@ export default memo(({ id, data, selected, edges, nodes, setNodes }) => {
   const allData = Array.isArray(data.data) ? data.data : (data.data ? [data.data] : []);
   const pinnedEntities = allData.filter(e => pinnedNames.includes(getEntityName(e, data.displayNameProperty)));
 
+  const highRisk   = Array.isArray(data.high_risk)   ? data.high_risk   : [];
+  const mediumRisk = Array.isArray(data.medium_risk) ? data.medium_risk : [];
+  const lowRisk    = Array.isArray(data.low_risk)    ? data.low_risk    : [];
+  const total = highRisk.length + mediumRisk.length + lowRisk.length;
+
+  // Derive query info from the last run's entity metadata
+  const sampleEntity = highRisk[0] || mediumRisk[0] || lowRisk[0];
+  const targetConcept = sampleEntity?._target_concept || null;
+  const relationType  = sampleEntity?._relation_type  || null;
+  const topPathScore  = sampleEntity?._path_score     || null;
+  const topRiskScore  = sampleEntity?._risk_score     || null;
+
+  // Score range across last run
+  const allScored = [...highRisk, ...mediumRisk, ...lowRisk];
+  const scores = allScored.map(e => e._risk_score).filter(s => s != null);
+  const maxScore = scores.length ? Math.max(...scores).toFixed(1) : null;
+  const minScore = scores.length ? Math.min(...scores).toFixed(1) : null;
+
+  // Top high-risk path trace preview
+  const topTrace = highRisk[0]?._path_trace;
+
+  const statBar = (color, count, label) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5, flex: 1 }}>
+      <div style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
+      <span style={{ fontSize: '0.65rem', color, fontWeight: 700 }}>{count}</span>
+      <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>{label}</span>
+    </div>
+  );
+
   return (
     <BaseNode
-      label={data.label || config.label}
+      label={config.label}
       icon={config.icon}
       type={config.type}
       data={data}
@@ -252,14 +390,107 @@ export default memo(({ id, data, selected, edges, nodes, setNodes }) => {
       isExpanded={isExpanded}
       setIsExpanded={setIsExpanded}
       color={config.color}
-      collapsedInfo={<span style={{ color: 'var(--text-muted)' }}>Analyzes Risk Exposure</span>}
+      collapsedInfo={
+        total > 0
+          ? <span style={{ display: 'flex', gap: 8, fontSize: '0.65rem' }}>
+              <span style={{ color: '#EF4444', fontWeight: 700 }}>{highRisk.length}H</span>
+              <span style={{ color: '#F59E0B', fontWeight: 700 }}>{mediumRisk.length}M</span>
+              <span style={{ color: '#10B981', fontWeight: 700 }}>{lowRisk.length}L</span>
+            </span>
+          : <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>No results yet</span>
+      }
     >
       <div style={{ marginTop: 12, borderTop: '1px solid var(--border-subtle)', paddingTop: 8 }}>
-        
-        {/* Universal Input Handle */}
+
+        {/* Input Handle */}
         <Handle type="target" position={Position.Left} id="data" style={{ left: -6 }} />
-        
-        {/* Distributed Routing Handles */}
+
+        {/* ── Live Stats Bar ── */}
+        {total > 0 && (
+          <div style={{
+            display: 'flex', gap: 4, padding: '6px 8px', marginBottom: 8,
+            background: 'var(--bg-surface)', borderRadius: 6,
+            border: '1px solid var(--border-subtle)'
+          }}>
+            {statBar('#EF4444', highRisk.length,   'High')}
+            {statBar('#F59E0B', mediumRisk.length, 'Med')}
+            {statBar('#10B981', lowRisk.length,    'Low')}
+            <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', alignSelf: 'center', marginLeft: 4 }}>
+              / {total} total
+            </span>
+          </div>
+        )}
+
+        {/* ── Active Query Info ── */}
+        {(targetConcept || relationType) && (
+          <div style={{
+            padding: '6px 8px', marginBottom: 8, borderRadius: 6,
+            background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.25)'
+          }}>
+            <p style={{ fontSize: '0.6rem', color: 'rgba(139,92,246,0.7)', margin: '0 0 4px' }}>LAST QUERY</p>
+            {relationType && (
+              <p style={{ fontSize: '0.65rem', color: 'var(--text-primary)', margin: '0 0 2px', fontFamily: 'monospace' }}>
+                <span style={{ color: 'rgba(139,92,246,0.9)' }}>[{relationType}]</span>
+              </p>
+            )}
+            {targetConcept && (
+              <p style={{ fontSize: '0.65rem', color: 'var(--cyan)', margin: 0,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                → "{targetConcept}"
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* ── Score Range ── */}
+        {scores.length > 0 && (
+          <div style={{
+            display: 'flex', justifyContent: 'space-between', padding: '4px 8px', marginBottom: 8,
+            background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border-subtle)'
+          }}>
+            <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+              Score range: <span style={{ color: '#10B981' }}>{minScore}</span>
+              <span style={{ color: 'var(--text-muted)' }}> → </span>
+              <span style={{ color: '#EF4444' }}>{maxScore}</span>
+            </span>
+            <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+              {allScored[0]?._hops != null ? `max ${Math.max(...allScored.map(e => e._hops || 0))} hops` : ''}
+            </span>
+          </div>
+        )}
+
+        {/* ── Top High-Risk Path Trace Preview ── */}
+        {topTrace && topTrace.length > 0 && (
+          <div style={{
+            padding: '6px 8px', marginBottom: 8, borderRadius: 6,
+            background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)'
+          }}>
+            <p style={{ fontSize: '0.6rem', color: 'rgba(239,68,68,0.7)', margin: '0 0 4px' }}>
+              TOP HIGH-RISK PATH — score {topRiskScore}
+            </p>
+            {topTrace.slice(0, 3).map((step, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 4, marginBottom: 2 }}>
+                <span style={{ fontSize: '0.55rem', color: 'var(--text-muted)', minWidth: 12, paddingTop: 1 }}>{step.step}.</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ fontSize: '0.6rem', color: 'var(--cyan)', fontFamily: 'monospace',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+                    {step.from}
+                  </span>
+                  {step.reason && (
+                    <span style={{ fontSize: '0.55rem', color: 'var(--text-muted)',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+                      {step.reason.slice(0, 60)}{step.reason.length > 60 ? '…' : ''}
+                    </span>
+                  )}
+                </div>
+                <span style={{ fontSize: '0.55rem', color: step.score >= 80 ? '#EF4444' : step.score >= 50 ? '#F59E0B' : '#10B981',
+                  fontWeight: 700, flexShrink: 0 }}>{step.score}%</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── Output Handles ── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.75rem', marginTop: '4px' }}>
           <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
             <span style={{ marginRight: '8px', color: 'var(--text-main)' }}>All Data</span>
@@ -320,4 +551,4 @@ export default memo(({ id, data, selected, edges, nodes, setNodes }) => {
       </div>
     </BaseNode>
   );
-});
+});
