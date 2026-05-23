@@ -68,6 +68,8 @@ export const saveSnapshot = (tableName, snapshotName, records, overwritePath = n
 export const listManualSnapshots = () => api.get('/api/v1/query/manual-snapshots').then(r => r.data);
 export const getManualSnapshotData = (path, limit = 1000) => api.post('/api/v1/query/manual-snapshot-data', { path, limit }).then(r => r.data);
 export const deleteManualSnapshot = (path) => api.delete('/api/v1/query/manual-snapshot', { params: { path } }).then(r => r.data);
+export const getPresignedDownloadUrl = (bucket, path) => api.get('/api/v1/query/presigned-download', { params: { bucket, path } }).then(r => r.data);
+
 
 // ── Neo4j Graph ──────────────────────────────────────
 export const getEntitiesByLabel = (sourceId) => api.get(`/api/v1/graph/entities/label/${sourceId}`).then(r => r.data);
@@ -82,3 +84,5 @@ export const executeNode = (nodeType, inputs, config) =>
   api.post(`/api/v1/nodes/execute/${nodeType}`, { inputs, config }).then(r => r.data);
 export const executeGraph = (nodes, edges) =>
   api.post('/api/v1/nodes/graph/execute', { nodes, edges }).then(r => r.data);
+
+export const listTrainedModels = () => api.get('/api/v1/nodes/models').then(r => r.data);

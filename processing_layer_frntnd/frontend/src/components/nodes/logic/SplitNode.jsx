@@ -3,13 +3,81 @@ import { useEdges, useNodes, Handle, Position, useReactFlow } from 'reactflow';
 import { Split, FileJson, Layers, Search, CheckCircle2 } from 'lucide-react';
 import BaseNode from '../BaseNode';
 
-const resolveUpstreamData = (incomingNodes) => {
+const parseNestedValue = (value) => {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return value;
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+};
+
+const isEncryptedValue = (value) => (
+  value && typeof value === 'object' && !Array.isArray(value) && value.__type__ === 'tenseal_encrypted'
+);
+
+const getExplodedAttributes = (entity) => {
+  if (!entity || typeof entity !== 'object' || Array.isArray(entity)) return [];
+
+  const attributes = [];
+
+  Object.entries(entity).forEach(([key, rawValue]) => {
+    const parsedValue = parseNestedValue(rawValue);
+    attributes.push({ key, value: parsedValue, handleId: `attr-out-${key}` });
+
+    if (
+      parsedValue &&
+      typeof parsedValue === 'object' &&
+      !Array.isArray(parsedValue) &&
+      !isEncryptedValue(parsedValue)
+    ) {
+      Object.entries(parsedValue).forEach(([subKey, subValue]) => {
+        attributes.push({
+          key: `${key}.${subKey}`,
+          value: subValue,
+          handleId: `attr-out-${key}.${subKey}`,
+        });
+      });
+    }
+  });
+
+  return attributes;
+};
+
+const formatAttributeValue = (value, autoEncryptNumericals = false) => {
+  if (value === undefined) return 'null';
+  if (autoEncryptNumericals && typeof value === 'number') {
+    return '{"__type__": "tenseal_..."}';
+  }
+  if (isEncryptedValue(value)) {
+    return '{"__type__": "tenseal_..."}';
+  }
+  if (typeof value === 'object' && value !== null) {
+    return JSON.stringify(value);
+  }
+  return String(value);
+};
+
+const resolveUpstreamData = (incomingNodes, specificEntityEdge = null) => {
   for (const n of incomingNodes) {
     if (!n.data) continue;
+    
+    // PRIORITY 1: If we have a specific connected handle, and its data exists, return it immediately as an array of 1
+    if (specificEntityEdge && n.id === specificEntityEdge.source && n.data[specificEntityEdge.sourceHandle]) {
+      return [n.data[specificEntityEdge.sourceHandle]];
+    }
+
     const candidates = [n.data.data, n.data.extracted, n.data.resolvedEntity, n.data.pinned, n.data.unpinned];
+    
+    // PRIORITY 2: Look for any non-empty array in the generic outputs
     for (const c of candidates) {
       if (Array.isArray(c) && c.length > 0) return c;
     }
+    
+    // PRIORITY 3: Look for any valid object in the generic outputs
     for (const c of candidates) {
       if (c && typeof c === 'object' && !Array.isArray(c)) return [c];
     }
@@ -39,7 +107,7 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
       if (incomingNodes.length > 0) {
         setLoading(true);
         
-        const dataList = resolveUpstreamData(incomingNodes);
+        const dataList = resolveUpstreamData(incomingNodes, specificEntityEdge);
             setEntities(dataList);
             if (specificEntityEdge) {
               let specificName = specificEntityEdge.sourceHandle;
@@ -97,6 +165,7 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
 
     const selectedEntityIndex = formData.selectedEntityIndex;
     const selectedEntity = selectedEntityIndex !== undefined && selectedEntityIndex !== '' ? entities[selectedEntityIndex] : null;
+    const explodedAttributes = getExplodedAttributes(selectedEntity);
 
     // Parse keys directly from entities
     const availableKeys = new Set();
@@ -130,9 +199,33 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input 
+            type="checkbox" 
+            id={`auto-encrypt-${nodeId}`}
+            checked={formData.autoEncryptNumericals || false}
+            onChange={(e) => handleChange('autoEncryptNumericals', e.target.checked)}
+            style={{ cursor: 'pointer' }}
+          />
+          <label htmlFor={`auto-encrypt-${nodeId}`} style={{ fontSize: '0.75rem', color: 'var(--text-primary)', cursor: 'pointer' }}>
+            Auto Encrypt Numericals
+          </label>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input 
+            type="checkbox" 
+            id={`auto-decrypt-${nodeId}`}
+            checked={formData.autoDecryptValues || false}
+            onChange={(e) => handleChange('autoDecryptValues', e.target.checked)}
+            style={{ cursor: 'pointer' }}
+          />
+          <label htmlFor={`auto-decrypt-${nodeId}`} style={{ fontSize: '0.75rem', color: 'var(--text-primary)', cursor: 'pointer' }}>
+            Auto Decrypt Encrypted Values
+          </label>
+        </div>
         {!isAutoSelected && (
           <>
-                <div>
+            <div>
                   <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Display Name Property</label>
               <select 
                 value={formData.displayNameProperty || ''} 
@@ -207,24 +300,16 @@ function SplitSettingsForm({ nodeId, formData, handleChange, nodes, edges }) {
               <p style={{ fontSize: '0.65rem', textTransform: 'uppercase', color: 'var(--text-muted)', margin: 0, letterSpacing: '0.05em' }}>Extracted Attributes Preview</p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {Array.from(new Set(selectedEntity ? Object.keys(selectedEntity) : [])).map((k) => {
-                // Try to safely get the value from selectedEntity (even if it's nested or inside a stringified json)
-                let v = selectedEntity ? selectedEntity[k] : undefined;
-                if (v === undefined && k.includes('.') && selectedEntity) {
-                  const parts = k.split('.');
-                  let current = selectedEntity;
-                  for (let p of parts) {
-                    if (current === null || current === undefined) break;
-                    current = current[p];
-                  }
-                  if (current !== undefined) v = current;
-                }
-
+              {explodedAttributes.map(({ key, value }) => {
                 return (
-                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '6px 10px', background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border-subtle)', fontSize: '0.65rem' }}>
-                    <span style={{ color: 'var(--accent-blue)', marginRight: 8, whiteSpace: 'nowrap', fontWeight: 600 }}>{k}</span>
+                  <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '6px 10px', background: 'var(--bg-surface)', borderRadius: 6, border: '1px solid var(--border-subtle)', fontSize: '0.65rem' }}>
+                    <span style={{ color: 'var(--accent-blue)', marginRight: 8, whiteSpace: 'nowrap', fontWeight: 600 }}>{key}</span>
                     <span style={{ color: 'var(--text-secondary)', fontFamily: 'JetBrains Mono', textAlign: 'right', wordBreak: 'break-all' }}>
-                      {v !== undefined ? (typeof v === 'object' ? JSON.stringify(v) : String(v)) : <span style={{ fontStyle: 'italic', opacity: 0.5 }}>null</span>}
+                      {value !== undefined ? 
+                        (formData.autoDecryptValues && isEncryptedValue(value) ? 
+                          <span style={{ color: 'var(--emerald)', fontWeight: 600 }}>[Decrypted on Output]</span> : 
+                          formatAttributeValue(value, formData.autoEncryptNumericals)
+                        ) : <span style={{ fontStyle: 'italic', opacity: 0.5 }}>null</span>}
                     </span>
                   </div>
                 );
@@ -266,7 +351,7 @@ export default memo(({ id, data, selected }) => {
     const specificEntityEdge = incomingEdges.find(e => e.sourceHandle && e.sourceHandle.startsWith('entity-out-'));
 
     if (incomingNodes.length > 0) {
-        const dataList = resolveUpstreamData(incomingNodes);
+        const dataList = resolveUpstreamData(incomingNodes, specificEntityEdge);
         let ent = null;
         let entName = null;
 
@@ -382,9 +467,9 @@ export default memo(({ id, data, selected }) => {
       />
       <div style={{ marginTop: 12, borderTop: '1px solid var(--border-subtle)', paddingTop: 8, position: 'relative' }}>
         {(() => {
-          const keysToShow = selectedEntity ? Object.keys(selectedEntity) : [];
+          const attributesToShow = getExplodedAttributes(selectedEntity);
           
-          if (keysToShow.length > 0) {
+          if (attributesToShow.length > 0) {
             return (
               <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
@@ -399,24 +484,9 @@ export default memo(({ id, data, selected }) => {
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
-                  {keysToShow.map((k) => {
-                    // Try to safely get the value if an entity is selected
-                    let v = undefined;
-                    if (selectedEntity) {
-                      v = selectedEntity[k];
-                      if (v === undefined && k.includes('.')) {
-                        const parts = k.split('.');
-                        let current = selectedEntity;
-                        for (let p of parts) {
-                          if (current === null || current === undefined) break;
-                          current = current[p];
-                        }
-                        if (current !== undefined) v = current;
-                      }
-                    }
-
+                  {attributesToShow.map(({ key, value, handleId }) => {
                     return (
-                      <div key={k} style={{ 
+                      <div key={handleId} style={{ 
                         position: 'relative', 
                         background: 'var(--bg-elevated)', 
                         padding: '4px 8px', 
@@ -428,17 +498,17 @@ export default memo(({ id, data, selected }) => {
                         gap: 6
                       }}>
                         <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--cyan)' }} />
-                        <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{k}</span>
+                        <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{key}</span>
                         {selectedEntity && (
                           <span style={{ color: 'var(--text-muted)', marginLeft: 'auto', fontFamily: 'JetBrains Mono', fontSize: '0.55rem', maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {v !== undefined ? (typeof v === 'object' ? '{...}' : String(v)) : 'null'}
+                            {formatAttributeValue(value, data.autoEncryptNumericals)}
                           </span>
                         )}
                         
                         {/* Dynamic Output Handle for Attribute */}
                         <Handle 
                           type="source" 
-                          id={`attr-out-${k}`}
+                          id={handleId}
                           position={Position.Right} 
                           style={{ 
                             right: -6, 

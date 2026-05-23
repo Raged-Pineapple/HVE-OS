@@ -184,14 +184,18 @@ async def get_manual_snapshot_data(request: SnapshotDataRequest):
     Reads the JSONL file directly from MinIO and returns it as a QueryResponse.
     """
     try:
-        data = minio_service.read_object(minio_service.SILVER_BUCKET, request.path)
-        content = data.decode("utf-8")
+        response = minio_service.minio_client.get_object(minio_service.SILVER_BUCKET, request.path)
         rows = []
-        for line in content.splitlines():
+        for line_bytes in response:
+            line = line_bytes.decode('utf-8')
             if line.strip():
                 rows.append(json.loads(line))
                 if len(rows) >= request.limit:
                     break
+
+        response.close()
+        response.release_conn()
+
         return {
             "columns": list(rows[0].keys()) if rows else [],
             "rows": rows,
@@ -214,3 +218,78 @@ async def delete_manual_snapshot(path: str):
     except Exception as e:
         logger.error(f"Failed to delete manual snapshot: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/query/presigned-download")
+async def get_presigned_download_url(bucket: str, path: str):
+    """
+    **Generate a Pre-signed URL for Downloading a Snapshot**
+    Returns a URL that can be used to download the file directly from MinIO.
+    """
+    try:
+        from services.minio_service import generate_presigned_download_url
+        url = generate_presigned_download_url(bucket, path)
+        return {"download_url": url}
+    except Exception as e:
+        logger.error(f"Failed to generate presigned download URL: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+from fastapi.responses import StreamingResponse
+import csv
+import io
+import os
+
+@router.get("/query/download-csv")
+async def download_csv(path: str):
+    """
+    **Download a Snapshot as CSV (Streaming)**
+    Reads the JSONL file from MinIO, converts it to CSV on the fly, and streams it to the user.
+    """
+    try:
+        response = minio_service.minio_client.get_object(minio_service.SILVER_BUCKET, path)
+        
+        def generate_csv(resp):
+            it = iter(resp)
+            try:
+                first_line = next(it)
+                while not first_line.strip():
+                    first_line = next(it)
+            except StopIteration:
+                return
+                
+            first_obj = json.loads(first_line.decode('utf-8'))
+            headers = list(first_obj.keys())
+            
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # Write headers
+            writer.writerow(headers)
+            # Write first row
+            writer.writerow([first_obj.get(k, '') for k in headers])
+            yield output.getvalue()
+            
+            output.seek(0)
+            output.truncate(0)
+            
+            # Write remaining rows
+            for line_bytes in it:
+                if line_bytes.strip():
+                    obj = json.loads(line_bytes.decode('utf-8'))
+                    writer.writerow([obj.get(k, '') for k in headers])
+                    yield output.getvalue()
+                    output.seek(0)
+                    output.truncate(0)
+                    
+            resp.close()
+            resp.release_conn()
+
+        filename = os.path.basename(path).replace(".jsonl", ".csv")
+        return StreamingResponse(
+            generate_csv(response),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        logger.error(f"Failed to stream CSV download: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+

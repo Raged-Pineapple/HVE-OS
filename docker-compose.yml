@@ -117,6 +117,23 @@ services:
   # ==========================================
   # KNOWLEDGE GRAPH (NEO4J)
   # ==========================================
+  # ==========================================
+  # TENSeAL HOMOMORPHIC ENCRYPTION ENGINE
+  # ==========================================
+  tenseal-engine:
+    build:
+      context: ./src/tenseal_engine
+      dockerfile: Dockerfile
+    container_name: hve-tenseal-engine
+    ports:
+      - "8001:8000"
+    volumes:
+      - tenseal_contexts:/app/contexts
+    environment:
+      CONTEXT_DIR: /app/contexts
+    networks:
+      - hve-network
+
   neo4j:
     image: neo4j:5-community
     container_name: hve-neo4j
@@ -142,3 +159,4 @@ volumes:
   kafka_data:
   neo4j_data:
   neo4j_logs:
+  tenseal_contexts:

@@ -1,5 +1,5 @@
 import React, { memo, useState, useEffect, useMemo, useRef } from 'react';
-import { Handle, Position, useEdges, useUpdateNodeInternals } from 'reactflow';
+import { Handle, Position, useEdges, useUpdateNodeInternals, useReactFlow } from 'reactflow';
 import { Fingerprint, Tags, Layers, Pin, PinOff, Search } from 'lucide-react';
 import BaseNode from '../BaseNode';
 
@@ -70,6 +70,18 @@ export const config = {
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input 
+            type="checkbox" 
+            id={`auto-encrypt-${nodeId}`}
+            checked={formData.autoEncryptConnected ?? true}
+            onChange={(e) => handleChange('autoEncryptConnected', e.target.checked)}
+            style={{ cursor: 'pointer' }}
+          />
+          <label htmlFor={`auto-encrypt-${nodeId}`} style={{ fontSize: '0.75rem', color: 'var(--text-primary)', cursor: 'pointer' }}>
+            Auto Encrypt Connected Entities
+          </label>
+        </div>
         <div>
           <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Strategy</label>
           <select 
@@ -227,9 +239,12 @@ export const config = {
 
 export default memo(({ id, data, selected }) => {
   const [isExpanded, setIsExpanded] = useState(true);
-  const [inputData, setInputData] = useState(null);
+  const inputDataState = useState(null);
+  const inputData = inputDataState[0];
+  const setInputData = inputDataState[1];
   const edges = useEdges();
   const updateNodeInternals = useUpdateNodeInternals();
+  const { setNodes } = useReactFlow();
 
   const extracted = data.extracted || [];
   const pinned = data.pinned || [];
@@ -238,6 +253,20 @@ export default memo(({ id, data, selected }) => {
 
   const myIncomingEdges = useMemo(() => edges.filter(e => e.target === id), [edges, id]);
   const connectedSourceIds = useMemo(() => myIncomingEdges.map(e => e.source), [myIncomingEdges]);
+
+  const myOutgoingEdges = useMemo(() => edges.filter(e => e.source === id), [edges, id]);
+  const prevHandlesRef = useRef('');
+
+  useEffect(() => {
+    const handles = myOutgoingEdges.map(e => e.sourceHandle).filter(h => h && h.startsWith('entity-out-'));
+    const serialised = JSON.stringify(handles);
+    if (prevHandlesRef.current !== serialised) {
+      prevHandlesRef.current = serialised;
+      setNodes(nds => nds.map(n => 
+        n.id === id ? { ...n, data: { ...n.data, connectedHandles: handles } } : n
+      ));
+    }
+  }, [myOutgoingEdges, id, setNodes]);
 
   useEffect(() => {
     const handleInputUpdate = (event) => {

@@ -7,6 +7,7 @@ from .combine import CombineNode
 from .math_node import MathNode
 from .string_node import StringNode
 from .risk_scoring_node import RiskCalculatorNode
+from .graph_visualization_node import GraphVisualizationNode
 
 __all__ = [
     "ExtractEntitiesNode",
@@ -14,5 +15,6 @@ __all__ = [
     "CombineNode",
     "MathNode",
     "StringNode",
-    "RiskCalculatorNode"
+    "RiskCalculatorNode",
+    "GraphVisualizationNode"
 ]

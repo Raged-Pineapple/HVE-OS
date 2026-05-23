@@ -62,16 +62,26 @@ const LogicGraphTab = () => {
           const message = JSON.parse(event.data);
           
           if (message.type === 'node_output') {
-            const { nodeId, outputs, sourceId } = message;
+            const { nodeId, outputs, success, error, metadata, sourceId } = message;
             setNodes((nds) =>
               nds.map((node) => {
                 if (node.id === nodeId) {
+                  // Shield against out-of-order progress ticks arriving after final completed metrics
+                  const hasFinalMetrics = node.data.metrics?.r2 !== undefined;
+                  const incomingIsProgressTick = outputs?.metrics?.current_epoch !== undefined && outputs?.metrics?.r2 === undefined;
+                  if (hasFinalMetrics && incomingIsProgressTick) {
+                    return node;
+                  }
+
                   return {
                     ...node,
                     data: {
                       ...node.data,
                       ...(sourceId && outputs?.keys ? { keys: outputs.keys, count: outputs.count, data: outputs.data } : {}),
-                      ...(outputs || {})
+                      ...(outputs || {}),
+                      metadata: metadata || node.data.metadata,
+                      success,
+                      error
                     }
                   };
                 }
@@ -158,9 +168,44 @@ const LogicGraphTab = () => {
     const extractConfigData = (data) => {
       // Strip out execution results so we only track configuration changes.
       // This prevents infinite loops when the backend sends us data updates.
-      const { keys, count, data: outputData, previewInput, _executionMetadata, error, success, ...config } = data || {};
+      const {
+        keys,
+        count,
+        data: outputData,
+        previewInput,
+        resolvedEntity,
+        pinned,
+        unpinned,
+        extracted,
+        columns,
+        snapshotPath,
+        inputSnapshotPath,
+        row_count,
+        _executionMetadata,
+        error,
+        success,
+        metrics,
+        model_info,
+        isTraining,
+        metadata,
+        ...config
+      } = data || {};
+      
+      // Strip any dynamic handles/outputs to prevent infinite loops when data changes
+      Object.keys(config).forEach(k => {
+        if (k.startsWith('entity-out-') || k.startsWith('attr-out-')) {
+          delete config[k];
+        }
+      });
+
       return config;
     };
+
+    const getConnectedEntityHandles = (nodeId) =>
+      edges
+        .filter((edge) => edge.source === nodeId)
+        .map((edge) => edge.sourceHandle)
+        .filter((handle) => handle && handle.startsWith('entity-out-'));
 
     // 1. Prepare data for localStorage (needs position data, but no execution data)
     const storageNodes = nodes.map(n => ({
@@ -175,11 +220,34 @@ const LogicGraphTab = () => {
     // 2. Prepare data for backend sync (doesn't need positions, just logical flow)
     if (!isWsConnected) return;
 
-    const graphNodes = storageNodes.map(n => ({
-      id: n.id,
-      type: n.type,
-      data: n.data
-    }));
+    const graphNodes = storageNodes.map(n => {
+      const graphData = { ...n.data };
+
+      if (n.type === 'extractEntities') {
+        graphData.connectedHandles = getConnectedEntityHandles(n.id);
+      }
+
+      if (
+        [
+          'encryptNode',
+          'decryptNode',
+          'heComputeNode',
+          'fheSequentialModelNode',
+          'inference'
+        ].includes(n.type)
+      ) {
+        const liveNode = nodes.find((node) => node.id === n.id);
+        if (liveNode?.data?.inputSnapshotPath) {
+          graphData.inputSnapshotPath = liveNode.data.inputSnapshotPath;
+        }
+      }
+
+      return {
+        id: n.id,
+        type: n.type,
+        data: graphData
+      };
+    });
     
     const graphEdges = edges.map(e => ({
       source: e.source,
@@ -383,7 +451,7 @@ const LogicGraphTab = () => {
         </div>
         {selectedNode && (
           <SettingsPanel 
-            node={selectedNode} 
+            node={nodes.find(n => n.id === selectedNode.id) || selectedNode} 
             nodes={nodes}
             edges={edges}
             onClose={() => setSelectedNode(null)} 

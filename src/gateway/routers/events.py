@@ -141,6 +141,7 @@ class ReactiveGraphEngine:
                 # early when settings change mid-batch.
                 node_config = dict(node.get('data', {}))
                 node_config['_cancel_event'] = cancel_event
+                node_config['_node_id'] = node_id
                         
                 try:
                     # 2. Execute Python logic off the main thread
@@ -148,15 +149,21 @@ class ReactiveGraphEngine:
                     
                     if result and result.success and result.outputs:
                         output_hash = await asyncio.to_thread(_hash_outputs, result.outputs)
+                        is_manual = isinstance(result.metadata, dict) and result.metadata.get("is_manual_trigger", False)
                         
-                        if self.output_hashes.get(node_id) != output_hash:
+                        if self.output_hashes.get(node_id) != output_hash or is_manual:
                             self.output_hashes[node_id] = output_hash
                             self.outputs[node_id] = result.outputs
                             
+                            final_outputs = {**result.outputs}
+                            if "isTraining" not in final_outputs:
+                                final_outputs["isTraining"] = False
+
                             await broadcast({
                                 'type': 'node_output', 'nodeId': node_id,
                                 'sourceId': node.get('data', {}).get('source_id') or node.get('data', {}).get('tableName') or node.get('data', {}).get('id'),
-                                'outputs': result.outputs, 'success': result.success
+                                'outputs': final_outputs, 'success': result.success,
+                                'metadata': result.metadata
                             })
                             
                             # 3. CASCADE: Exclusively trigger downstream nodes!
@@ -168,7 +175,10 @@ class ReactiveGraphEngine:
                     logger.error(f"Node execution failed: {node_id} - {e}", exc_info=True)
                     await broadcast({
                         'type': 'node_output', 'nodeId': node_id,
-                        'success': False, 'error': str(e)
+                        'success': False, 'error': str(e),
+                        'outputs': {
+                            'isTraining': False
+                        }
                     })
         finally:
             self.running[node_id] = False

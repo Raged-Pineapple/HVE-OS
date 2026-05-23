@@ -204,7 +204,8 @@ def get_snapshots(source_id: str) -> List[Dict[str, Any]]:
                 "timestamp_ms": snap.timestamp_ms,
             })
         return history
-    except NoSuchTableError:
+    except Exception as e:
+        logger.warning(f"Could not load snapshots for Iceberg table {table_identifier}: {e}")
         return []
 
 def scan_as_of(source_id: str, snapshot_id: int):
@@ -235,10 +236,16 @@ def drop_table(source_id: str) -> bool:
         return True
     except NoSuchTableError:
         logger.warning(f"Iceberg table not found (already gone): {table_identifier}")
-        return False
+        return True
     except Exception as e:
-        logger.error(f"Failed to drop Iceberg table {table_identifier}: {e}")
-        return False
+        logger.warning(f"Failed to drop Iceberg table {table_identifier} with purge: {e}. Retrying registry-only drop...")
+        try:
+            catalog.drop_table(table_identifier, purge_requested=False)
+            logger.info(f"Dropped Iceberg table registry-only: {table_identifier}")
+            return True
+        except Exception as e2:
+            logger.error(f"Failed to drop Iceberg table {table_identifier} even without purge: {e2}")
+            return False
 
 def drop_all_tables():
     """Drops all Iceberg tables in our namespace."""
@@ -246,8 +253,16 @@ def drop_all_tables():
     try:
         tables = catalog.list_tables(ICEBERG_NAMESPACE)
         for table_id in tables:
-            catalog.drop_table(table_id, purge_requested=True)
-            logger.info(f"Dropped Iceberg table: {table_id}")
+            try:
+                catalog.drop_table(table_id, purge_requested=True)
+                logger.info(f"Dropped Iceberg table: {table_id}")
+            except Exception as e:
+                logger.warning(f"Failed to drop table {table_id} with purge: {e}. Retrying registry-only...")
+                try:
+                    catalog.drop_table(table_id, purge_requested=False)
+                    logger.info(f"Dropped Iceberg table registry-only: {table_id}")
+                except Exception as e2:
+                    logger.error(f"Failed to drop table {table_id} registry-only: {e2}")
         return True
     except Exception as e:
         logger.error(f"Failed to drop all Iceberg tables: {e}")

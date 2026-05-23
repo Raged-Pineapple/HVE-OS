@@ -1,6 +1,428 @@
 import React, { memo, useState, useEffect, useRef } from 'react';
 import { Handle, Position } from 'reactflow';
-import { AlertTriangle, Pin, PinOff, Search, ChevronDown, ChevronRight } from 'lucide-react';
+import { AlertTriangle, Pin, PinOff, Search, ChevronDown, ChevronRight, Network, ArrowLeft } from 'lucide-react';
+
+// ── Path Trace Canvas: force-directed graph from a single entity's _path_trace ──
+const getRiskColor = (score) => {
+  if (score >= 70) return '#EF4444';
+  if (score >= 35) return '#F59E0B';
+  if (score != null) return '#10B981';
+  return '#8B5CF6';
+};
+
+const PathTraceCanvas = ({ entity, width = 300, height = 250 }) => {
+  const canvasRef   = useRef(null);
+  const animRef     = useRef(null);
+  const posRef      = useRef({});
+  const velRef      = useRef({});
+  const transformRef  = useRef({ scale: 1, ox: 0, oy: 0 });
+  const dragRef        = useRef(null);   // viewport pan: {startX, startY, ox, oy}
+  const draggedNodeRef = useRef(null);   // node drag:    {nodeId, startWx, startWy, startPx, startPy}
+  const [hoveredNode, setHoveredNode] = useState(null);
+  const [hoveredEdge, setHoveredEdge] = useState(null);
+  const [selectedEdge, setSelectedEdge] = useState(null);
+  const [tooltip, setTooltip] = useState(null);      // node hover
+  const [edgeTooltip, setEdgeTooltip] = useState(null); // edge hover {x,y,edge}
+
+  // Derive graph data once per entity change
+  const graphRef = useRef({ nodeList: [], edgeList: [] });
+  useEffect(() => {
+    const trace = entity?._path_trace || [];
+    const nodeMap = {}, edgeList = [];
+    const getId   = (d) => String(d?._hve_id || d?.id || d?.name || d?.title || JSON.stringify(d)).slice(0, 60);
+    const getLbl  = (d) => String(d?.name || d?.title || d?.text || d?._hve_id || '?').slice(0, 24);
+    trace.forEach((step, i) => {
+      const srcDict = step.src_node || {}, tgtDict = step.tgt_node || {};
+      const srcId = getId(srcDict) || `src_${i}`, tgtId = getId(tgtDict) || `tgt_${i}`;
+      if (!nodeMap[srcId]) nodeMap[srcId] = { id: srcId, label: getLbl(srcDict), score: step.score, attrs: srcDict };
+      if (!nodeMap[tgtId]) nodeMap[tgtId] = { id: tgtId, label: getLbl(tgtDict), score: step.score, attrs: tgtDict };
+      edgeList.push({ source: srcId, target: tgtId, label: step.relation || step.rel || '', score: step.score, reason: step.reason || '' });
+    });
+    graphRef.current = { nodeList: Object.values(nodeMap), edgeList };
+    // Reset positions for new entity
+    posRef.current = {};
+    velRef.current = {};
+    transformRef.current = { scale: 1, ox: 0, oy: 0 };
+  }, [entity]);
+
+  // Main simulation + draw loop
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    const loop = () => {
+      const { nodeList, edgeList } = graphRef.current;
+      const pos = posRef.current, vel = velRef.current;
+      const { scale, ox, oy } = transformRef.current;
+
+      // Init positions for new nodes
+      nodeList.forEach(n => {
+        if (!pos[n.id]) {
+          pos[n.id] = { x: Math.random()*(width-80)+40, y: Math.random()*(height-80)+40 };
+          vel[n.id] = { x: 0, y: 0 };
+        }
+      });
+
+      // Physics
+      for (let i = 0; i < nodeList.length; i++) {
+        for (let j = i+1; j < nodeList.length; j++) {
+          const a = nodeList[i], b = nodeList[j];
+          const dx=(pos[a.id]?.x||0)-(pos[b.id]?.x||0), dy=(pos[a.id]?.y||0)-(pos[b.id]?.y||0);
+          const d=Math.sqrt(dx*dx+dy*dy)||1, f=1800/(d*d);
+          vel[a.id].x+=(dx/d)*f; vel[a.id].y+=(dy/d)*f;
+          vel[b.id].x-=(dx/d)*f; vel[b.id].y-=(dy/d)*f;
+        }
+      }
+      edgeList.forEach(e => {
+        const s=pos[e.source],t=pos[e.target]; if(!s||!t) return;
+        const dx=t.x-s.x, dy=t.y-s.y;
+        vel[e.source].x+=dx*0.04; vel[e.source].y+=dy*0.04;
+        vel[e.target].x-=dx*0.04; vel[e.target].y-=dy*0.04;
+      });
+      nodeList.forEach(n => {
+        vel[n.id].x*=0.75; vel[n.id].y*=0.75;
+        // Only clamp when not zoomed/panned (free movement otherwise)
+        pos[n.id].x += vel[n.id].x;
+        pos[n.id].y += vel[n.id].y;
+      });
+
+      // Draw
+      ctx.save();
+      ctx.clearRect(0, 0, width, height);
+      ctx.setTransform(scale, 0, 0, scale, ox, oy);
+
+      // Grid hint
+      ctx.strokeStyle='rgba(100,100,150,0.06)'; ctx.lineWidth=0.5/scale;
+      for(let gx=0;gx<width*2;gx+=40){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,height*2);ctx.stroke();}
+      for(let gy=0;gy<height*2;gy+=40){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(width*2,gy);ctx.stroke();}
+
+      // Edges — start/end at node circumference, not centre
+      edgeList.forEach((e, eIdx) => {
+        const s=pos[e.source],t=pos[e.target]; if(!s||!t) return;
+        const c=getRiskColor(e.score);
+        const NODE_R = 14;
+        const ang = Math.atan2(t.y - s.y, t.x - s.x);
+        const sx = s.x + Math.cos(ang) * NODE_R;
+        const sy = s.y + Math.sin(ang) * NODE_R;
+        const ARROW_LEN = 10;
+        const ex = t.x - Math.cos(ang) * (NODE_R + ARROW_LEN);
+        const ey = t.y - Math.sin(ang) * (NODE_R + ARROW_LEN);
+        const tipX = t.x - Math.cos(ang) * NODE_R;
+        const tipY = t.y - Math.sin(ang) * NODE_R;
+        const isEdgeHov = hoveredEdge === eIdx;
+        const isEdgeSel = selectedEdge?.idx === eIdx;
+        const lineW = isEdgeHov || isEdgeSel ? 3.5 : 2.5;
+        const alpha = isEdgeHov || isEdgeSel ? 'ee' : '88';
+        // Line
+        ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(ex,ey);
+        ctx.strokeStyle=c+alpha; ctx.lineWidth=lineW; ctx.stroke();
+        // Arrowhead
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(tipX - ARROW_LEN*Math.cos(ang-0.45), tipY - ARROW_LEN*Math.sin(ang-0.45));
+        ctx.lineTo(tipX - ARROW_LEN*Math.cos(ang+0.45), tipY - ARROW_LEN*Math.sin(ang+0.45));
+        ctx.closePath(); ctx.fillStyle=c+'cc'; ctx.fill();
+        // Edge label
+        if (e.label) {
+          ctx.fillStyle= isEdgeHov||isEdgeSel ? 'rgba(255,255,255,0.95)' : 'rgba(200,200,230,0.9)';
+          ctx.font=`bold 9px Inter,sans-serif`; ctx.textAlign='center';
+          ctx.fillText(e.label, (s.x+t.x)/2, (s.y+t.y)/2 - 8);
+        }
+        // Score on edge
+        if (e.score != null) {
+          ctx.font=`8px Inter,sans-serif`;
+          ctx.fillStyle=c+'bb';
+          ctx.fillText(`${e.score}%`, (s.x+t.x)/2, (s.y+t.y)/2 + 4);
+        }
+      });
+
+      // Nodes
+      const NODE_R = 14;
+      nodeList.forEach(n => {
+        const p=pos[n.id]; if(!p) return;
+        const c=getRiskColor(n.score);
+        const isHov = hoveredNode===n.id || draggedNodeRef.current?.nodeId===n.id;
+        const r = isHov ? NODE_R * 1.25 : NODE_R;
+        // Circle
+        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2);
+        ctx.fillStyle = isHov ? c+'55' : c+'28'; ctx.fill();
+        ctx.strokeStyle = c; ctx.lineWidth = isHov ? 2.5 : 1.8; ctx.stroke();
+        // Glow
+        if (isHov) {
+          ctx.shadowColor=c; ctx.shadowBlur=16;
+          ctx.beginPath(); ctx.arc(p.x,p.y,r,0,Math.PI*2);
+          ctx.strokeStyle=c+'66'; ctx.lineWidth=1; ctx.stroke();
+          ctx.shadowBlur=0;
+        }
+        // Label — fixed 10px, readable at all zoom levels
+        ctx.fillStyle='rgba(230,230,245,0.97)';
+        ctx.font=`bold 10px Inter,sans-serif`; ctx.textAlign='center';
+        const lbl=n.label.length>16 ? n.label.slice(0,15)+'…' : n.label;
+        ctx.fillText(lbl, p.x, p.y + r + 13);
+        // Score badge
+        if (n.score != null) {
+          ctx.font=`8px Inter,sans-serif`;
+          ctx.fillStyle = c + 'cc';
+          ctx.fillText(`${n.score}%`, p.x, p.y + r + 23);
+        }
+      });
+
+      ctx.restore();
+      animRef.current = requestAnimationFrame(loop);
+    };
+    animRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(animRef.current);
+  }, [entity, hoveredNode, hoveredEdge, selectedEdge, width, height]);
+
+  // ── Mouse event helpers ───────────────────────────────────────────────────
+  const canvasToWorld = (cx, cy) => {
+    const { scale, ox, oy } = transformRef.current;
+    return { x: (cx - ox) / scale, y: (cy - oy) / scale };
+  };
+
+  const findNodeAt = (wx, wy) => {
+    const { nodeList } = graphRef.current;
+    const pos = posRef.current;
+    const NODE_R = 14;
+    for (const n of nodeList) {
+      const p = pos[n.id]; if (!p) continue;
+      const dx = wx - p.x, dy = wy - p.y;
+      if (dx*dx + dy*dy < NODE_R*NODE_R*2) return n;
+    }
+    return null;
+  };
+
+  // Point-to-segment distance for edge hit-testing
+  const findEdgeAt = (wx, wy) => {
+    const { edgeList } = graphRef.current;
+    const pos = posRef.current;
+    const HIT = 22; // wider hit area so thin edges are easy to click
+    const NODE_R = 14;
+    for (let i = 0; i < edgeList.length; i++) {
+      const e = edgeList[i];
+      const s = pos[e.source], t = pos[e.target];
+      if (!s || !t) continue;
+      const ang = Math.atan2(t.y - s.y, t.x - s.x);
+      const sx = s.x + Math.cos(ang) * NODE_R, sy = s.y + Math.sin(ang) * NODE_R;
+      const ex = t.x - Math.cos(ang) * NODE_R, ey = t.y - Math.sin(ang) * NODE_R;
+      // Project point onto segment
+      const dx = ex - sx, dy = ey - sy;
+      const lenSq = dx*dx + dy*dy;
+      if (lenSq === 0) continue;
+      const t2 = Math.max(0, Math.min(1, ((wx-sx)*dx + (wy-sy)*dy) / lenSq));
+      const px = sx + t2*dx - wx, py = sy + t2*dy - wy;
+      if (px*px + py*py < HIT*HIT) return { edge: e, idx: i };
+    }
+    return null;
+  };
+
+  // Attach wheel listener as NON-PASSIVE so we can call preventDefault()
+  // and stop ReactFlow's parent from zooming at the same time.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const rect  = canvas.getBoundingClientRect();
+      const cx = (e.clientX - rect.left) * (width / rect.width);
+      const cy = (e.clientY - rect.top)  * (height / rect.height);
+      const factor = e.deltaY < 0 ? 1.12 : 0.88;
+      const t = transformRef.current;
+      const newScale = Math.max(0.3, Math.min(6, t.scale * factor));
+      transformRef.current = {
+        scale: newScale,
+        ox: cx - (cx - t.ox) * (newScale / t.scale),
+        oy: cy - (cy - t.oy) * (newScale / t.scale),
+      };
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [width, height]);
+
+  const handleMouseDown = (e) => {
+    if (e.button !== 0) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const cx = (e.clientX - rect.left) * (width / rect.width);
+    const cy = (e.clientY - rect.top)  * (height / rect.height);
+    const w  = canvasToWorld(cx, cy);
+    const hitNode = findNodeAt(w.x, w.y);
+    if (hitNode) {
+      setSelectedEdge(null);
+      draggedNodeRef.current = { nodeId: hitNode.id };
+    } else {
+      const hitEdge = findEdgeAt(w.x, w.y);
+      if (hitEdge) {
+        setSelectedEdge(hitEdge);
+      } else {
+        setSelectedEdge(null);
+        const t = transformRef.current;
+        dragRef.current = { startX: e.clientX, startY: e.clientY, ox: t.ox, oy: t.oy };
+      }
+    }
+  };
+
+  const handleMouseMove = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const cx = (e.clientX - rect.left) * (width / rect.width);
+    const cy = (e.clientY - rect.top)  * (height / rect.height);
+    const w  = canvasToWorld(cx, cy);
+
+    if (draggedNodeRef.current) {
+      const { nodeId } = draggedNodeRef.current;
+      posRef.current[nodeId] = { x: w.x, y: w.y };
+      velRef.current[nodeId] = { x: 0, y: 0 };
+      return;
+    }
+    if (dragRef.current) {
+      const dx = e.clientX - dragRef.current.startX;
+      const dy = e.clientY - dragRef.current.startY;
+      transformRef.current = { ...transformRef.current, ox: dragRef.current.ox + dx, oy: dragRef.current.oy + dy };
+      return;
+    }
+
+    const hitNode = findNodeAt(w.x, w.y);
+    if (hitNode) {
+      setHoveredNode(hitNode.id); setHoveredEdge(null);
+      setTooltip({ x: cx, y: cy, node: hitNode });
+      setEdgeTooltip(null);
+    } else {
+      const hitEdge = findEdgeAt(w.x, w.y);
+      setHoveredNode(null);
+      setTooltip(null);
+      if (hitEdge) {
+        setHoveredEdge(hitEdge.idx);
+        setEdgeTooltip({ x: cx, y: cy, edge: hitEdge.edge });
+      } else {
+        setHoveredEdge(null);
+        setEdgeTooltip(null);
+      }
+    }
+  };
+
+  const handleMouseUp = () => {
+    draggedNodeRef.current = null;
+    dragRef.current = null;
+  };
+
+  if (!entity?._path_trace?.length) {
+    return (
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height, color:'var(--text-muted)', fontSize:'0.65rem' }}>
+        No path trace data available
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position:'relative', width:'100%', height }}>
+      <canvas
+        ref={canvasRef}
+        width={width}
+        height={height}
+        onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e); }}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={() => { dragRef.current=null; setHoveredNode(null); setHoveredEdge(null); setTooltip(null); }}
+        style={{ width:'100%', height:'100%', borderRadius:6, display:'block', cursor: hoveredNode ? 'pointer' : hoveredEdge != null ? 'crosshair' : 'grab' }}
+      />
+
+      {/* Node hover tooltip */}
+      {tooltip && (
+        <div style={{
+          position:'absolute', left: tooltip.x + 12, top: tooltip.y - 10,
+          background:'var(--bg-elevated)', border:'1px solid var(--border-subtle)',
+          borderRadius:6, padding:'6px 8px', fontSize:'0.6rem',
+          color:'var(--text-primary)', pointerEvents:'none', zIndex:100,
+          maxWidth:160, boxShadow:'0 4px 12px rgba(0,0,0,0.3)'
+        }}>
+          <strong style={{ display:'block', marginBottom:2, color: getRiskColor(tooltip.node.score) }}>
+            {tooltip.node.label}
+          </strong>
+          {tooltip.node.score != null && <div>Risk score: {tooltip.node.score}%</div>}
+          {Object.entries(tooltip.node.attrs || {})
+            .filter(([k]) => !k.startsWith('_'))
+            .slice(0, 4)
+            .map(([k,v]) => (
+              <div key={k} style={{ color:'var(--text-muted)', marginTop:1 }}>
+                {k}: <span style={{ color:'var(--text-primary)' }}>{String(v).slice(0,30)}</span>
+              </div>
+            ))
+          }
+        </div>
+      )}
+
+      {/* Edge hover tooltip — same style as node tooltip */}
+      {edgeTooltip && !selectedEdge && (
+        <div style={{
+          position:'absolute',
+          left: Math.min(edgeTooltip.x + 12, width - 175),
+          top: Math.max(edgeTooltip.y - 80, 4),
+          background:'var(--bg-elevated)', border:`1px solid ${getRiskColor(edgeTooltip.edge.score)}44`,
+          borderRadius:6, padding:'8px 10px', fontSize:'0.6rem',
+          color:'var(--text-primary)', pointerEvents:'none', zIndex:102,
+          maxWidth:190, boxShadow:'0 4px 16px rgba(0,0,0,0.35)'
+        }}>
+          <strong style={{ display:'block', marginBottom:3, color: getRiskColor(edgeTooltip.edge.score), fontSize:'0.65rem' }}>
+            {edgeTooltip.edge.label || 'Relationship'}
+          </strong>
+          <div style={{ marginBottom:5 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
+              <span style={{ color:'var(--text-muted)' }}>Score</span>
+              <span style={{ color: getRiskColor(edgeTooltip.edge.score), fontWeight:700 }}>{edgeTooltip.edge.score}%</span>
+            </div>
+            <div style={{ height:3, background:'var(--bg-surface)', borderRadius:2, overflow:'hidden' }}>
+              <div style={{ height:'100%', width:`${edgeTooltip.edge.score}%`, background: getRiskColor(edgeTooltip.edge.score), borderRadius:2 }} />
+            </div>
+          </div>
+          {edgeTooltip.edge.reason && (
+            <div style={{ color:'var(--text-muted)', fontStyle:'italic', lineHeight:1.5, borderTop:'1px solid var(--border-subtle)', paddingTop:4, marginTop:2 }}>
+              {edgeTooltip.edge.reason.slice(0, 120)}{edgeTooltip.edge.reason.length > 120 ? '…' : ''}
+            </div>
+          )}
+          <div style={{ color:'rgba(150,150,180,0.6)', marginTop:4, fontSize:'0.55rem' }}>click edge to pin details</div>
+        </div>
+      )}
+
+      {/* Edge detail panel — shown at bottom when an edge is selected */}
+      {selectedEdge && (
+        <div style={{
+          position:'absolute', bottom:0, left:0, right:0,
+          background:'var(--bg-elevated)', borderTop:`2px solid ${getRiskColor(selectedEdge.edge.score)}`,
+          borderRadius:'0 0 6px 6px', padding:'8px 10px', zIndex:101,
+          boxShadow:'0 -4px 16px rgba(0,0,0,0.35)'
+        }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:5 }}>
+            <strong style={{ fontSize:'0.65rem', color: getRiskColor(selectedEdge.edge.score) }}>
+              {selectedEdge.edge.label || 'Relationship'}
+            </strong>
+            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <span style={{ fontSize:'0.65rem', fontWeight:700, color: getRiskColor(selectedEdge.edge.score) }}>
+                {selectedEdge.edge.score}%
+              </span>
+              <button onClick={() => setSelectedEdge(null)}
+                style={{ background:'none', border:'none', color:'var(--text-muted)', cursor:'pointer', fontSize:'0.7rem', padding:'0 2px' }}>✕</button>
+            </div>
+          </div>
+          {/* Score bar */}
+          <div style={{ height:3, background:'var(--bg-surface)', borderRadius:2, marginBottom:6, overflow:'hidden' }}>
+            <div style={{ height:'100%', width:`${selectedEdge.edge.score}%`, background: getRiskColor(selectedEdge.edge.score), borderRadius:2 }} />
+          </div>
+          {selectedEdge.edge.reason && (
+            <div style={{ fontSize:'0.6rem', color:'var(--text-muted)', lineHeight:1.5, fontStyle:'italic' }}>
+              {selectedEdge.edge.reason}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Controls hint */}
+      <div style={{ position:'absolute', bottom:4, right:6, fontSize:'0.5rem', color:'rgba(150,150,180,0.4)', pointerEvents:'none' }}>
+        scroll to zoom · drag to pan · click edge for details
+      </div>
+    </div>
+  );
+};
 import BaseNode from '../BaseNode';
 
 const getEntityName = (entity, displayProperty) => {
@@ -34,6 +456,7 @@ export const config = {
     const [searchTerm, setSearchTerm] = useState('');
     const [activeTab, setActiveTab] = useState('all');
     const [expandedEntities, setExpandedEntities] = useState(new Set());
+    const [selectedGraphEntity, setSelectedGraphEntity] = useState(null);
     const prevPropRef = useRef(formData.displayNameProperty);
 
     useEffect(() => {
@@ -85,6 +508,56 @@ export const config = {
 
     const activeData = riskTabs.find(t => t.key === activeTab)?.data || [];
     const filteredData = activeData.filter(e => getEntityName(e, formData.displayNameProperty).toLowerCase().includes(searchTerm.toLowerCase()));
+
+    // ── Graph view: 3rd panel ──────────────────────────────────────────────────
+    if (selectedGraphEntity) {
+      const gName = getEntityName(selectedGraphEntity, formData.displayNameProperty);
+      const trace = selectedGraphEntity._path_trace || [];
+      return (
+        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+          {/* Header */}
+          <div style={{ display:'flex', alignItems:'center', gap:8, paddingBottom:8, borderBottom:'1px solid var(--border-subtle)' }}>
+            <button onClick={() => setSelectedGraphEntity(null)}
+              style={{ background:'none', border:'none', color:'var(--text-muted)', cursor:'pointer', padding:4, display:'flex', alignItems:'center' }}>
+              <ArrowLeft size={16} />
+            </button>
+            <div>
+              <div style={{ fontSize:'0.75rem', fontWeight:600, color:'var(--text-primary)' }}>Path Graph: {gName}</div>
+              <div style={{ fontSize:'0.6rem', color:'var(--text-muted)' }}>Risk: {selectedGraphEntity._risk_score ?? 'N/A'} · {trace.length} hops</div>
+            </div>
+          </div>
+
+          {/* Canvas */}
+          <div style={{ width:'100%', height:250, background:'var(--bg-surface)', borderRadius:8, border:'1px solid var(--border-subtle)', overflow:'hidden' }}>
+            <PathTraceCanvas entity={selectedGraphEntity} width={300} height={250} />
+          </div>
+
+          {/* Legend */}
+          <div style={{ display:'flex', gap:12, fontSize:'0.6rem', color:'var(--text-muted)', justifyContent:'center' }}>
+            {[['#EF4444','High (≥70)'],['#F59E0B','Medium (35-69)'],['#10B981','Low (<35)'],['#8B5CF6','Unknown']].map(([c,l])=>(
+              <span key={l} style={{ display:'flex', alignItems:'center', gap:4 }}>
+                <span style={{ width:8, height:8, borderRadius:'50%', background:c, display:'inline-block' }} />{l}
+              </span>
+            ))}
+          </div>
+
+          {/* Step list */}
+          <div style={{ fontSize:'0.65rem', color:'var(--text-muted)', fontWeight:600, marginTop:4 }}>Hop Detail</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:4, maxHeight:200, overflowY:'auto' }}>
+            {trace.map((step, i) => (
+              <div key={i} style={{ padding:'6px 8px', background:'var(--bg-surface)', borderRadius:6, border:'1px solid var(--border-subtle)' }}>
+                <div style={{ display:'flex', justifyContent:'space-between' }}>
+                  <span style={{ color:'var(--cyan)', fontWeight:600, fontSize:'0.6rem' }}>[{step.step ?? i+1}] {step.relation || step.rel}</span>
+                  <span style={{ color:getRiskColor(step.score), fontWeight:700, fontSize:'0.6rem' }}>{step.score}%</span>
+                </div>
+                <div style={{ color:'var(--text-muted)', fontSize:'0.6rem', marginTop:2 }}>↳ {step.from} → {step.to}</div>
+                {step.reason && <div style={{ color:'var(--text-muted)', fontSize:'0.6rem', fontStyle:'italic', marginTop:2 }}>{step.reason}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -222,19 +695,32 @@ export const config = {
                       </span>
                     </div>
 
-                    <div 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const currentPinned = formData.pinnedEntities || [];
-                        if (isPinned) {
-                          handleChange('pinnedEntities', currentPinned.filter(n => n !== name));
-                        } else {
-                          handleChange('pinnedEntities', [...currentPinned, name]);
-                        }
-                      }}
-                      style={{ cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
-                    >
-                      {isPinned ? <Pin size={12} fill="var(--cyan)" color="var(--cyan)" /> : <PinOff size={12} color="var(--text-muted)" style={{ opacity: 0.5 }} />}
+                    <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+                      {/* Graph viz button */}
+                      {(entity._path_trace?.length > 0) && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setSelectedGraphEntity(entity); }}
+                          title="Visualize path graph"
+                          style={{ background:'var(--bg-elevated)', border:'1px solid var(--border-subtle)', borderRadius:4, padding:'3px 4px', color:'var(--text-muted)', cursor:'pointer', display:'flex', alignItems:'center' }}
+                        >
+                          <Network size={11} />
+                        </button>
+                      )}
+                      {/* Pin button */}
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const currentPinned = formData.pinnedEntities || [];
+                          if (isPinned) {
+                            handleChange('pinnedEntities', currentPinned.filter(n => n !== name));
+                          } else {
+                            handleChange('pinnedEntities', [...currentPinned, name]);
+                          }
+                        }}
+                        style={{ cursor:'pointer', padding:4, display:'flex', alignItems:'center' }}
+                      >
+                        {isPinned ? <Pin size={12} fill="var(--cyan)" color="var(--cyan)" /> : <PinOff size={12} color="var(--text-muted)" style={{ opacity:0.5 }} />}
+                      </div>
                     </div>
                   </div>
                   

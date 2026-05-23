@@ -14,6 +14,35 @@ except ImportError:
 router = APIRouter(prefix="/api/v1/ai-prep", tags=["AI Data Preparation"])
 logger = logging.getLogger(__name__)
 
+from gateway.services import minio_service
+
+@router.get("/models")
+async def list_trained_models():
+    """
+    List all trained model checkpoints from MinIO S3 Silver bucket under 'models/'.
+    """
+    try:
+        objects = minio_service.minio_client.list_objects(
+            minio_service.SILVER_BUCKET,
+            prefix="models/",
+            recursive=True
+        )
+        models = []
+        for obj in objects:
+            path = obj.object_name
+            name = path[len("models/"):] if path.startswith("models/") else path
+            if name.endswith(".pt") or name.endswith(".pth"):
+                models.append({
+                    "name": name,
+                    "path": f"{minio_service.SILVER_BUCKET}/{path}",
+                    "size_bytes": obj.size,
+                    "last_modified": obj.last_modified.isoformat() if obj.last_modified else None
+                })
+        return models
+    except Exception as e:
+        logger.error(f"Failed to list trained models: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 class SequenceRequest(BaseModel):
     data: List[dict]
     window_size: int

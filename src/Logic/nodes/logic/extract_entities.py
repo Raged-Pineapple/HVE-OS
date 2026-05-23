@@ -23,6 +23,49 @@ def parse_nested_value(value: Any) -> Any:
     return value
 
 
+def _encrypt_entity_numericals(entity: Dict[str, Any], tenseal_provider) -> Dict[str, Any]:
+    """Encrypt top-level and one-level nested numeric attributes for UI-routed entity outputs."""
+    encrypted_entity = entity.copy()
+
+    for key, value in encrypted_entity.items():
+        parsed_value = parse_nested_value(value)
+
+        if isinstance(parsed_value, bool):
+            encrypted_entity[key] = parsed_value
+            continue
+
+        if isinstance(parsed_value, (int, float)):
+            try:
+                encrypted_entity[key] = tenseal_provider.encrypt(
+                    float(parsed_value),
+                    {"scheme": "CKKS", "context_id": "default"}
+                )
+            except Exception as e:
+                logger.warning(f"ExtractEntities: Failed to auto-encrypt field '{key}': {e}")
+                encrypted_entity[key] = parsed_value
+            continue
+
+        if isinstance(parsed_value, dict) and parsed_value.get("__type__") != "tenseal_encrypted":
+            nested = parsed_value.copy()
+            for nested_key, nested_value in nested.items():
+                if isinstance(nested_value, bool):
+                    continue
+                if isinstance(nested_value, (int, float)):
+                    try:
+                        nested[nested_key] = tenseal_provider.encrypt(
+                            float(nested_value),
+                            {"scheme": "CKKS", "context_id": "default"}
+                        )
+                    except Exception as e:
+                        logger.warning(f"ExtractEntities: Failed to auto-encrypt nested field '{key}.{nested_key}': {e}")
+            encrypted_entity[key] = nested
+            continue
+
+        encrypted_entity[key] = parsed_value
+
+    return encrypted_entity
+
+
 def extract_by_key_path(data: List[Dict], key_path: str) -> List[Dict]:
     """Extract nested values using dot notation path."""
     if not key_path:
@@ -171,6 +214,17 @@ class ExtractEntitiesNode(BaseNode):
         unpinned_entities = []
         dynamic_outputs = {}
         
+        auto_encrypt = config.get("autoEncryptConnected", True)
+        connected_handles = config.get("connectedHandles", [])
+        tenseal_provider = None
+
+        try:
+            from Logic.security.registry import registry
+            tenseal_provider = registry.get_provider("tenseal")
+            logger.info("ExtractEntities: Loaded TenSEAL provider.")
+        except Exception as e:
+            logger.warning(f"ExtractEntities: Failed to load TenSEAL provider: {e}")
+        
         for idx, entity in enumerate(extracted):
             name = self._get_entity_name(entity, display_property)
             
@@ -182,13 +236,21 @@ class ExtractEntitiesNode(BaseNode):
                 unique_id = f"id_{entity['id']}"
             else:
                 unique_id = f"idx_{idx}"
-                
-            if name in pinned_names:
-                pinned_entities.append(entity)
-                dynamic_outputs[f"entity-out-pinned-{unique_id}::{name}"] = entity
+            
+            is_pinned = name in pinned_names
+            out_handle = f"entity-out-pinned-{unique_id}::{name}" if is_pinned else f"entity-out-{unique_id}::{name}"
+            
+            out_entity = entity
+            is_connected = out_handle in connected_handles
+            if tenseal_provider and is_connected:
+                out_entity = _encrypt_entity_numericals(entity, tenseal_provider)
+                            
+            if is_pinned:
+                pinned_entities.append(out_entity)
+                dynamic_outputs[out_handle] = out_entity
             else:
-                unpinned_entities.append(entity)
-                dynamic_outputs[f"entity-out-{unique_id}::{name}"] = entity
+                unpinned_entities.append(out_entity)
+                dynamic_outputs[out_handle] = out_entity
         
         logger.info(f"ExtractEntities: Extracted {len(extracted)} entities, {len(pinned_entities)} pinned, {len(unpinned_entities)} unpinned")
         

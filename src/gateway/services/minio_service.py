@@ -83,6 +83,23 @@ def generate_presigned_upload_url(source_id: str, filename: str) -> dict:
         raise Exception(f"Failed to generate MinIO Pre-Signed URL: {e}")
 
 
+def generate_presigned_download_url(bucket: str, object_path: str) -> str:
+    """
+    Generates a Pre-Signed URL for downloading directly from MinIO.
+    """
+    try:
+        url = minio_client.presigned_get_object(
+            bucket,
+            object_path,
+            expires=timedelta(hours=1),
+        )
+        return url
+    except S3Error as e:
+        logger.error(f"Failed to generate MinIO Pre-Signed Download URL: {e}")
+        raise
+
+
+
 # ============================================================
 # BRONZE WRITES (Stage 2: Immutable Vault)
 # ============================================================

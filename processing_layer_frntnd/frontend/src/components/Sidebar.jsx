@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Database, Brain, Filter, Zap, ChevronLeft, ChevronRight, Activity, Sigma, RefreshCw, FileJson, Trash2 } from 'lucide-react';
+import { Database, Brain, Filter, Zap, ChevronLeft, ChevronRight, Activity, Sigma, RefreshCw, FileJson, Trash2, Shield } from 'lucide-react';
 import { listGraphSources, getEntitiesByLabel, listSilverTables, getTableSnapshots, listManualSnapshots, deleteManualSnapshot } from '../api/client.js';
 import { getNodesByCategory } from './nodes/registry.js';
 
@@ -132,27 +132,44 @@ export default function Sidebar({ onInjectNode }) {
 
     const fetchAllSnapshots = async (tables) => {
         setLoadingTables(true);
-        const snaps = {};
-        const mSnaps = {};
-        try {
-            await Promise.all(tables.map(async (t) => {
-                try {
-                    const res = await getTableSnapshots(t.table_name);
-                    if (res && res.length > 0) snaps[t.table_name] = res;
-                } catch (e) {}
-            }));
-            try {
-                const manual = await listManualSnapshots();
+        
+        // 1. Fetch manual snapshots immediately (this is very fast)
+        const manualPromise = listManualSnapshots()
+            .then(manual => {
+                const mSnaps = {};
                 manual.forEach(m => {
                     if (!mSnaps[m.table_name]) mSnaps[m.table_name] = [];
                     mSnaps[m.table_name].push(m);
                 });
-            } catch(e) {}
+                setManualSnapshots(mSnaps);
+            })
+            .catch(e => console.error("Failed to fetch manual snapshots", e));
+
+        // 2. Fetch table iceberg snapshots in parallel (this is slow, do not block the spinner or manual snapshots)
+        const tablePromise = Promise.all(tables.map(async (t) => {
+            try {
+                const res = await getTableSnapshots(t.table_name);
+                return { tableName: t.table_name, snaps: res };
+            } catch (e) {
+                return { tableName: t.table_name, snaps: [] };
+            }
+        })).then(results => {
+            const snaps = {};
+            results.forEach(({ tableName, snaps: res }) => {
+                if (res && res.length > 0) snaps[tableName] = res;
+            });
             setTableSnapshots(snaps);
-            setManualSnapshots(mSnaps);
+        });
+
+        // Resolve manual snapshots first so they appear instantly!
+        try {
+            await manualPromise;
         } finally {
             setLoadingTables(false);
         }
+
+        // Let the Iceberg table snapshots load quietly in the background
+        tablePromise.catch(e => console.error("Failed to fetch table snapshots", e));
     };
 
     useEffect(() => {
@@ -312,6 +329,20 @@ export default function Sidebar({ onInjectNode }) {
                 </button>
 
                 <button 
+                    onClick={() => setView('security')} 
+                    style={{ 
+                        flexShrink: 0, padding: '8px 14px', border: '1px solid var(--border-default)', borderRadius: 8, 
+                        background: view === 'security' ? 'var(--cyan-dim)' : 'var(--bg-elevated)', 
+                        color: view === 'security' ? 'var(--cyan)' : 'var(--text-secondary)', 
+                        cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
+                        borderColor: view === 'security' ? 'var(--cyan)' : 'var(--border-default)'
+                    }}
+                >
+                    <Shield size={14} color={view === 'security' ? 'var(--cyan)' : '#ef4444'} />
+                    Security
+                </button>
+
+                <button 
                     onClick={() => setView('action')} 
                     style={{ 
                         flexShrink: 0, padding: '8px 14px', border: '1px solid var(--border-default)', borderRadius: 8, 
@@ -415,7 +446,31 @@ export default function Sidebar({ onInjectNode }) {
                                                     <FileJson size={14} color="var(--accent-teal)" />
                                                     <div>
                                                         <p style={{ margin: 0, fontWeight: 600 }}>{snap.snapshot_name}</p>
-                                                        <p style={{ margin: 0, fontSize: '0.65rem', color: 'var(--text-muted)' }}>{new Date(parseInt(snap.last_modified)).toLocaleString()}</p>
+                                                        <p style={{ margin: 0, fontSize: '0.65rem', color: 'var(--text-muted)' }}>{new Date(snap.last_modified).toLocaleString()}</p>
+                                                        {snap.encrypted_fields && snap.encrypted_fields.length > 0 && (
+                                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                                                                {snap.encrypted_fields.map((field, fIdx) => (
+                                                                    <span 
+                                                                        key={fIdx} 
+                                                                        style={{ 
+                                                                            fontSize: '0.6rem', 
+                                                                            background: 'rgba(239, 68, 68, 0.15)', 
+                                                                            color: '#ef4444', 
+                                                                            padding: '1px 6px', 
+                                                                            borderRadius: 4, 
+                                                                            fontWeight: 600,
+                                                                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                                                                            display: 'inline-flex',
+                                                                            alignItems: 'center',
+                                                                            gap: 3
+                                                                        }}
+                                                                        title={`Field encrypted with Homomorphic Encryption (TenSEAL)`}
+                                                                    >
+                                                                        🔒 {field}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </div>
                                                 <button

@@ -4,7 +4,8 @@ import { Database, Play, AlertCircle, TableProperties, Maximize2, X, Download, S
 import { HotTable } from '@handsontable/react-wrapper';
 import { registerAllModules } from 'handsontable/registry';
 import 'handsontable/dist/handsontable.full.css';
-import { runQuery, saveSnapshot, executeTimeTravelQuery, getManualSnapshotData } from '../../../api/client.js';
+import { useNodes, useReactFlow } from 'reactflow';
+import { runQuery, saveSnapshot, executeTimeTravelQuery, getManualSnapshotData, getPresignedDownloadUrl } from '../../../api/client.js';
 import BaseNode from '../BaseNode';
 
 // Register all Handsontable plugins and modules
@@ -17,29 +18,42 @@ const TableEditorModal = ({ tableName, initialSnapshotName, isUpdate, overwriteP
   // Convert rows (array of objects) → 2D array Handsontable expects
   const data = (rows || []).map(row => (columns || []).map(col => {
     const v = row[col];
+    if (v && typeof v === 'object' && v.__type__ === 'tenseal_encrypted' && typeof v.data === 'string') {
+      const displayV = { ...v, data: v.data.substring(0, 40) + '... [TRUNCATED FOR UI]' };
+      return JSON.stringify(displayV);
+    }
     return typeof v === 'object' && v !== null ? JSON.stringify(v) : (v ?? '');
   }));
 
   if (!rows || rows.length === 0) return null;
 
   const exportCSV = useCallback(() => {
-    const hot = hotRef.current?.hotInstance;
-    if (hot) {
-      const plugin = hot.getPlugin('exportFile');
-      plugin.downloadFile('csv', {
-        bom: false,
-        columnDelimiter: ',',
-        columnHeaders: true,
-        exportHiddenColumns: true,
-        exportHiddenRows: true,
-        fileExtension: 'csv',
-        filename: `${tableName}_export`,
-        mimeType: 'text/csv',
-        rowDelimiter: '\r\n',
-        rowHeaders: false,
-      });
-    }
-  }, [tableName]);
+    if (!rows || rows.length === 0) return;
+    
+    // Generate CSV manually to ensure un-truncated encrypted data is exported properly
+    const headers = columns.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',');
+    const csvRows = rows.map(row => {
+      return columns.map(col => {
+        let val = row[col];
+        if (typeof val === 'object' && val !== null) {
+          val = JSON.stringify(val);
+        } else if (val === null || val === undefined) {
+          val = '';
+        }
+        return `"${String(val).replace(/"/g, '""')}"`;
+      }).join(',');
+    });
+    
+    const csvContent = [headers, ...csvRows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${tableName}_export.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [rows, columns, tableName]);
 
   const [saving, setSaving] = useState(false);
   const [snapshotNameInput, setSnapshotNameInput] = useState(initialSnapshotName || `${tableName}_snap`);
@@ -59,10 +73,17 @@ const TableEditorModal = ({ tableName, initialSnapshotName, isUpdate, overwriteP
       const currentData = hot.getData();
       const currentHeaders = hot.getColHeader();
       
-      const records = currentData.map(rowArray => {
+      const records = currentData.map((rowArray, rowIdx) => {
         const obj = {};
-        rowArray.forEach((val, idx) => {
-          const colName = currentHeaders[idx];
+        rowArray.forEach((val, colIdx) => {
+          const colName = currentHeaders[colIdx];
+          
+          // Restore original encrypted data to avoid corrupting it in the snapshot
+          if (typeof val === 'string' && val.includes('[TRUNCATED FOR UI]')) {
+             obj[colName] = rows[rowIdx][colName];
+             return;
+          }
+
           // Try to parse back stringified objects/arrays
           if (typeof val === 'string' && (val.startsWith('{') || val.startsWith('['))) {
              try {
@@ -214,6 +235,33 @@ const TableEditorModal = ({ tableName, initialSnapshotName, isUpdate, overwriteP
 };
 
 // ── Node Config ─────────────────────────────────────────────
+
+// Helper to prevent LocalStorage quota exceeded errors from massive encrypted strings
+const stripEncryptedData = (rows) => {
+  if (!Array.isArray(rows)) return rows;
+  return rows.map(row => {
+    const cleanRow = { ...row };
+    for (const key in cleanRow) {
+      const val = cleanRow[key];
+      if (val && typeof val === 'object' && val.__type__ === 'tenseal_encrypted' && typeof val.data === 'string') {
+        cleanRow[key] = { ...val, data: val.data.substring(0, 40) + '... [TRUNCATED FOR UI]' };
+      }
+    }
+    return cleanRow;
+  });
+};
+
+// Helper to safely render cells in the 5-row preview without freezing
+const renderCellPreview = (val) => {
+  if (val && typeof val === 'object') {
+    if (val.__type__ === 'tenseal_encrypted' && typeof val.data === 'string') {
+      return JSON.stringify({ ...val, data: val.data.substring(0, 40) + '... [TRUNCATED FOR UI]' });
+    }
+    return JSON.stringify(val);
+  }
+  return String(val ?? '');
+};
+
 export const config = {
   type: 'silverTable',
   category: 'database',
@@ -228,6 +276,52 @@ export const config = {
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(false);
     const [showEditor, setShowEditor] = useState(false);
+    
+    // Hook to update node data so other nodes can access snapshot data
+    const nodes = useNodes();
+    const { setNodes: updateNodes } = useReactFlow();
+
+    // Store result in node data when it changes
+    useEffect(() => {
+      if (result?.rows && result?.columns && nodeId) {
+        const safeRows = stripEncryptedData(result.rows.slice(0, 10));
+        console.log('[SilverTableNode] Storing safe metadata in node.data for other nodes:', { columns: result.columns });
+        
+        const saveAndSync = async () => {
+          let updatedSnapshotPath = formData?.snapshotPath || null;
+          if (!updatedSnapshotPath && result.rows.length > 0) {
+            try {
+              const saveRes = await saveSnapshot(tableName, `${tableName}_temp`, result.rows);
+              if (saveRes?.path) {
+                updatedSnapshotPath = saveRes.path;
+                console.log('[SilverTableNode] Saved query result to temp snapshot:', updatedSnapshotPath);
+              }
+            } catch (saveErr) {
+              console.error('[SilverTableNode] Failed to save query temp snapshot:', saveErr);
+            }
+          }
+          
+          updateNodes(nds => nds.map(n => {
+            if (n.id === nodeId) {
+              return { 
+                ...n, 
+                data: { 
+                  ...n.data, 
+                  rows: undefined, // Clear out the massive array to prevent QuotaExceededError
+                  resolvedEntity: safeRows, // Only send a 10-row preview payload
+                  columns: result.columns,
+                  row_count: result.row_count,
+                  snapshotPath: updatedSnapshotPath
+                } 
+              };
+            }
+            return n;
+          }));
+        };
+        
+        saveAndSync();
+      }
+    }, [result, nodeId, updateNodes, tableName, formData?.snapshotPath]);
 
     const handleRunQuery = async () => {
       setLoading(true);
@@ -248,6 +342,47 @@ export const config = {
         setLoading(false);
       }
     };
+
+    const handleDownload = useCallback(async () => {
+      if (formData.snapshotPath) {
+        // Stream read JSONL from MinIO and convert to CSV on the fly
+        const url = `http://localhost:8000/api/v1/query/download-csv?path=${encodeURIComponent(formData.snapshotPath)}`;
+        window.open(url, '_blank');
+        return;
+      }
+
+      
+      // Fallback for fresh query results: Memory CSV method
+      if (!result?.rows || result.rows.length === 0) {
+        alert('No data available to download');
+        return;
+      }
+      
+      const headers = result.columns.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',');
+      const csvRows = result.rows.map(row => {
+        return result.columns.map(col => {
+          let val = row[col];
+          if (typeof val === 'object' && val !== null) {
+            val = JSON.stringify(val);
+          } else if (val === null || val === undefined) {
+            val = '';
+          }
+          return `"${String(val).replace(/"/g, '""')}"`;
+        }).join(',');
+      });
+      
+      const csvContent = [headers, ...csvRows].join('\r\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `${tableName}_export.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }, [result, tableName, formData.snapshotPath]);
+
+
 
     useEffect(() => {
       handleRunQuery();
@@ -331,6 +466,33 @@ export const config = {
             </button>
           )}
 
+          {/* Download Button (Always Visible) */}
+          <button
+            onClick={handleDownload}
+            style={{
+              width: '100%',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              padding: '10px',
+              background: 'rgba(20, 184, 166, 0.15)',
+              color: 'var(--accent-teal)',
+              border: '1px solid rgba(20, 184, 166, 0.4)',
+              borderRadius: 6,
+              fontSize: '0.75rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              letterSpacing: '0.05em',
+              transition: 'background-color 0.2s',
+            }}
+            onMouseOver={e => e.target.style.background = 'rgba(20, 184, 166, 0.25)'}
+            onMouseOut={e => e.target.style.background = 'rgba(20, 184, 166, 0.15)'}
+          >
+
+
+            <Download size={14} />
+            {formData.snapshotPath ? 'Download CSV File' : 'Download CSV'}
+          </button>
+
+
           {/* Error */}
           {error && (
             <div style={{
@@ -354,7 +516,7 @@ export const config = {
                   <span style={{ fontSize: '0.6rem', color: 'var(--text-secondary)' }}>
                     {result.row_count} rows · {result.execution_time_ms.toFixed(0)}ms
                   </span>
-                  {result.rows?.length > 0 && (
+                  {result?.rows?.length > 0 && (
                     <button
                       onClick={() => setShowEditor(true)}
                       style={{
@@ -368,6 +530,8 @@ export const config = {
                       Open in Excel
                     </button>
                   )}
+
+
                 </div>
               </div>
 
@@ -393,7 +557,7 @@ export const config = {
                         <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
                           {result.columns.map((col, j) => (
                             <td key={j} style={{ padding: '3px 8px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                              {typeof row[col] === 'object' ? JSON.stringify(row[col]) : String(row[col] ?? '')}
+                              {renderCellPreview(row[col])}
                             </td>
                           ))}
                         </tr>
@@ -425,8 +589,77 @@ export const config = {
 };
 
 // ── Canvas Node ─────────────────────────────────────────────
-export default memo(({ data, selected }) => {
+export default memo(({ id, data, selected }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+  const { setNodes: updateNodes } = useReactFlow();
+
+  // Auto-fetch snapshot data on mount (if not already fetched)
+  useEffect(() => {
+    if ((data.resolvedEntity || data.rows) && data.columns) {
+      console.log('[SilverTableNode] Already has data, skipping fetch');
+      return;
+    }
+    
+    const fetchData = async () => {
+      try {
+        let res;
+        const tableName = data.tableName || data.id;
+        const sql = `SELECT * FROM ${tableName} LIMIT 500`;
+        
+        if (data.snapshotPath) {
+          res = await getManualSnapshotData(data.snapshotPath, 1000);
+        } else if (data.snapshotId) {
+          res = await executeTimeTravelQuery(sql, data.snapshotId);
+        } else {
+          res = await runQuery(sql);
+        }
+        
+        console.log('[SilverTableNode] Auto-fetched data:', { rows: res?.rows?.length, columns: res?.columns });
+        
+        if (res?.rows && res?.columns) {
+          const safeRows = stripEncryptedData(res.rows.slice(0, 10));
+          
+          const saveAndSync = async () => {
+            let updatedSnapshotPath = data.snapshotPath || null;
+            if (!updatedSnapshotPath && res.rows.length > 0) {
+              try {
+                const saveRes = await saveSnapshot(tableName, `${tableName}_temp`, res.rows);
+                if (saveRes?.path) {
+                  updatedSnapshotPath = saveRes.path;
+                  console.log('[SilverTableNode mount] Saved query result to temp snapshot:', updatedSnapshotPath);
+                }
+              } catch (saveErr) {
+                console.error('[SilverTableNode mount] Failed to save query temp snapshot:', saveErr);
+              }
+            }
+            
+            updateNodes(nds => nds.map(n => {
+              if (n.id === id) {
+                return { 
+                  ...n, 
+                  data: { 
+                    ...n.data, 
+                    rows: undefined, // Clear out the massive array to prevent QuotaExceededError
+                    resolvedEntity: safeRows, // Only send a 10-row preview payload
+                    columns: res.columns,
+                    row_count: res.row_count,
+                    snapshotPath: updatedSnapshotPath
+                  } 
+                };
+              }
+              return n;
+            }));
+          };
+          
+          saveAndSync();
+        }
+      } catch (err) {
+        console.error('[SilverTableNode] Auto-fetch failed:', err.message);
+      }
+    };
+    
+    fetchData();
+  }, [id, data.tableName, data.snapshotPath, data.snapshotId]);
 
   return (
     <BaseNode

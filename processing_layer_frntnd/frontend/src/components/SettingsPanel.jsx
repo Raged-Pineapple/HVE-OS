@@ -7,12 +7,58 @@ export default function SettingsPanel({ node, nodes, edges, onClose, onUpdate })
 
   useEffect(() => {
     setFormData(node?.data || {});
-  }, [node]);
+  }, [node?.id]);
+
+  useEffect(() => {
+    if (!node?.data) return;
+
+    const runtimePatch = {};
+    [
+      'previewInput',
+      'columns',
+      'inputSnapshotPath',
+      'keys',
+      'count',
+      'data',
+      'resolvedEntity',
+      'metadata',
+      'success',
+      'error',
+      'row_count',
+      'snapshotPath'
+    ].forEach((key) => {
+      if (node.data[key] !== undefined) {
+        runtimePatch[key] = node.data[key];
+      }
+    });
+
+    if (Object.keys(runtimePatch).length > 0) {
+      setFormData((prev) => ({ ...prev, ...runtimePatch }));
+    }
+  }, [
+    node?.data?.previewInput,
+    node?.data?.columns,
+    node?.data?.inputSnapshotPath,
+    node?.data?.keys,
+    node?.data?.count,
+    node?.data?.data,
+    node?.data?.resolvedEntity,
+    node?.data?.metadata,
+    node?.data?.success,
+    node?.data?.error,
+    node?.data?.row_count,
+    node?.data?.snapshotPath
+  ]);
 
   if (!node) return null;
 
   const handleChange = (field, value) => {
-    const updatedData = { ...formData, [field]: value };
+    let updatedData;
+    if (typeof field === 'object' && field !== null) {
+      updatedData = { ...formData, ...field };
+    } else {
+      updatedData = { ...formData, [field]: value };
+    }
     setFormData(updatedData);
     onUpdate(node.id, updatedData);
   };

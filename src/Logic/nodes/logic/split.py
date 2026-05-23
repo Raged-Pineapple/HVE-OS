@@ -22,6 +22,49 @@ def _parse_nested_literal(val: Any) -> Any:
                 pass
     return val
 
+
+def _explode_entity_attributes(entity: Dict[str, Any], auto_encrypt: bool = False, auto_decrypt: bool = False, tenseal_provider = None) -> Dict[str, Any]:
+    outputs: Dict[str, Any] = {}
+
+    for k, v in entity.items():
+        parsed_val = _parse_nested_literal(v)
+
+        # Auto-decrypt if enabled and it's an encrypted value
+        if auto_decrypt and tenseal_provider and isinstance(parsed_val, dict) and parsed_val.get("__type__") == "tenseal_encrypted":
+            try:
+                logger.info(f"SplitNode: Sending data for decrypt on field '{k}': {parsed_val}")
+                parsed_val = tenseal_provider.decrypt(parsed_val, {"context_id": parsed_val.get("context_id", "default")})
+                logger.info(f"SplitNode: Auto-decrypted field '{k}'")
+            except Exception as e:
+                logger.warning(f"SplitNode: Failed to auto-decrypt field '{k}': {e}")
+
+        if auto_encrypt and tenseal_provider and isinstance(parsed_val, (int, float)):
+            try:
+                parsed_val = tenseal_provider.encrypt(
+                    float(parsed_val),
+                    {"scheme": "CKKS", "context_id": "default"}
+                )
+            except Exception as e:
+                logger.warning(f"SplitNode: Failed to auto-encrypt field '{k}': {e}")
+
+        entity[k] = parsed_val
+        outputs[f"attr-out-{k}"] = {k: parsed_val}
+
+        if isinstance(parsed_val, dict) and parsed_val.get("__type__") != "tenseal_encrypted":
+            for sub_k, sub_v in parsed_val.items():
+                sub_parsed = _parse_nested_literal(sub_v)
+                if auto_encrypt and tenseal_provider and isinstance(sub_parsed, (int, float)):
+                    try:
+                        sub_parsed = tenseal_provider.encrypt(
+                            float(sub_parsed),
+                            {"scheme": "CKKS", "context_id": "default"}
+                        )
+                    except Exception as e:
+                        logger.warning(f"SplitNode: Failed to auto-encrypt nested field '{sub_k}': {e}")
+                outputs[f"attr-out-{k}.{sub_k}"] = {sub_k: sub_parsed}
+
+    return outputs
+
 @register_node
 class SplitNode(BaseNode):
     """
@@ -95,15 +138,19 @@ class SplitNode(BaseNode):
         outputs = {"data": entity, "resolvedEntity": entity}   # Provide fallback raw pass-through and UI preview
 
         # 2. Explode attributes dynamically for the graph engine routing
+        auto_encrypt = config.get("autoEncryptNumericals", False)
+        auto_decrypt = config.get("autoDecryptValues", False)
+        tenseal_provider = None
+        if auto_encrypt or auto_decrypt:
+            try:
+                from Logic.security.registry import registry
+                tenseal_provider = registry.get_provider("tenseal")
+                logger.info("SplitNode: Auto-encrypt enabled. Loaded TenSEAL provider.")
+            except Exception as e:
+                logger.error(f"SplitNode: Failed to load TenSEAL provider for auto-encrypt: {e}")
+
         if isinstance(entity, dict):
-            for k, v in entity.items():
-                parsed_val = _parse_nested_literal(v)
-                outputs[f"attr-out-{k}"] = {k: parsed_val}
-                
-                # Explode 1-level deep for nested JSON objects to mirror the UI schema exactly
-                if isinstance(parsed_val, dict):
-                    for sub_k, sub_v in parsed_val.items():
-                        outputs[f"attr-out-{k}.{sub_k}"] = {sub_k: sub_v}
+            outputs.update(_explode_entity_attributes(entity, auto_encrypt, auto_decrypt, tenseal_provider))
 
         logger.info(f"SplitNode outputs generated: {list(outputs.keys())}")
         logger.info(f"SplitNode: Exploded entity into {len(outputs) - 2} dynamic attribute streams.")
