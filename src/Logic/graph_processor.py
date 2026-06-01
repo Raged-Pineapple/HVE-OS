@@ -25,7 +25,7 @@ from collections import defaultdict
 logger = logging.getLogger(__name__)
 
 # Configuration
-KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:9094")
+KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "127.0.0.1:9094")
 CONSUMER_GROUP = "hve-graph-processor-v1"
 
 class GraphProcessor:

@@ -11,7 +11,7 @@ import os
 # Kafka configuration
 # We default to the internal docker network port if running inside docker,
 # or localhost:9094 if running the API locally against the dockerized Kafka
-KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:9094")
+KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "127.0.0.1:9094")
 RAW_TOPIC = "raw-telemetry"
 SILVER_TOPIC = "silver-telemetry"
 

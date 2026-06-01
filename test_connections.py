@@ -6,9 +6,9 @@ def test_connection(host, port, service_name):
     """Attempt to open a TCP connection to the specified host and port."""
     try:
         with socket.create_connection((host, int(port)), timeout=5):
-            print(f"[✅ SUCCESS] Connected to {service_name} on {host}:{port}")
+            print(f"[SUCCESS] Connected to {service_name} on {host}:{port}")
     except Exception as e:
-        print(f"[❌ FAILED] Could not connect to {service_name} on {host}:{port} - {e}")
+        print(f"[FAILED] Could not connect to {service_name} on {host}:{port} - {e}")
 
 def main():
     # 1. Accurately locate and load the .env file
@@ -33,7 +33,7 @@ def main():
         if port:
             test_connection("127.0.0.1", port, service)
         else:
-            print(f"[⚠️ WARNING] No port defined for {service} in .env")
+            print(f"[WARNING] No port defined for {service} in .env")
 
 if __name__ == "__main__":
     main()

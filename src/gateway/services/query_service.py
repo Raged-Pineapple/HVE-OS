@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 # DuckDB in-memory instance
 _conn = None
 _registered_tables = set()
+_registered_table_snapshots = {}
+_registered_parquet_files = {}
 
 
 def get_connection():
@@ -37,7 +39,7 @@ def _refresh_tables(sql_context: str = None):
     and register as DuckDB views.
     Optional sql_context can be used to only refresh tables mentioned in the query.
     """
-    global _registered_tables
+    global _registered_tables, _registered_table_snapshots, _registered_parquet_files
     conn = get_connection()
 
     try:
@@ -53,6 +55,8 @@ def _refresh_tables(sql_context: str = None):
             try:
                 conn.execute(f"DROP TABLE IF EXISTS \"{old_table}\"")
                 _registered_tables.remove(old_table)
+                _registered_table_snapshots.pop(old_table, None)
+                _registered_parquet_files.pop(old_table, None)
                 logger.info(f"Purged from DuckDB (deleted in registry): {old_table}")
             except Exception as e:
                 logger.error(f"Failed to purge {old_table} from memory: {e}")
@@ -67,11 +71,28 @@ def _refresh_tables(sql_context: str = None):
         
         try:
             # ── TRY ICEBERG FIRST ──
-            arrow_table = iceberg_service.scan_latest(table_name)
+            # Load Iceberg REST catalog dynamically to check latest snapshots
+            catalog = iceberg_service.get_catalog()
+            table_identifier = f"{iceberg_service.ICEBERG_NAMESPACE}.{table_name}"
+            
+            try:
+                table = catalog.load_table(table_identifier)
+                history = table.history()
+                latest_snap_id = history[-1].snapshot_id if history else None
+            except Exception as ie_load:
+                # If table does not exist or has no history, raise to fallback to legacy parquet
+                raise ie_load
+
+            # Performance Optimization: Skip scanning if already registered and up-to-date
+            if table_name in _registered_tables and _registered_table_snapshots.get(table_name) == latest_snap_id:
+                continue
+
+            arrow_table = table.scan().to_arrow()
             conn.execute(f"DROP TABLE IF EXISTS \"{table_name}\"")
             conn.execute(f"CREATE TABLE \"{table_name}\" AS SELECT * FROM arrow_table")
             _registered_tables.add(table_name)
-            logger.info(f"Registered DuckDB table from Iceberg: {table_name} ({arrow_table.num_rows} rows)")
+            _registered_table_snapshots[table_name] = latest_snap_id
+            logger.info(f"Registered DuckDB table from Iceberg: {table_name} ({arrow_table.num_rows} rows), snapshot {latest_snap_id}")
             continue  # Skip Parquet fallback
         except Exception as ie:
             logger.debug(f"Not an Iceberg table or load failed for {table_name}: {ie}. Falling back to Parquet.")
@@ -82,6 +103,10 @@ def _refresh_tables(sql_context: str = None):
         parquet_files = minio_service.list_silver_parquet_files(table_name)
         
         if not parquet_files:
+            continue
+
+        # Performance Optimization: Skip re-registering if already registered and files are identical
+        if table_name in _registered_tables and _registered_parquet_files.get(table_name) == parquet_files:
             continue
 
         try:
@@ -104,6 +129,7 @@ def _refresh_tables(sql_context: str = None):
                 conn.execute(f"DROP TABLE IF EXISTS \"{table_name}\"")
                 conn.execute(f"CREATE TABLE \"{table_name}\" AS SELECT * FROM combined")
                 _registered_tables.add(table_name)
+                _registered_parquet_files[table_name] = parquet_files
                 logger.info(f"Registered DuckDB table: {table_name} ({combined.num_rows} rows from {len(parquet_files)} files)")
 
         except Exception as e:
@@ -254,9 +280,11 @@ def preview_table(table_name: str, limit: int = 10) -> dict:
 
 def close_connection():
     """Close the DuckDB connection."""
-    global _conn, _registered_tables
+    global _conn, _registered_tables, _registered_table_snapshots, _registered_parquet_files
     if _conn:
         _conn.close()
         _conn = None
         _registered_tables.clear()
+        _registered_table_snapshots.clear()
+        _registered_parquet_files.clear()
         logger.info("DuckDB connection closed.")

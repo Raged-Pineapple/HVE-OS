@@ -26,16 +26,16 @@ def test_neo4j():
             print(f"Attempt {attempt}/{max_retries}: Connecting to Neo4j...")
             driver = GraphDatabase.driver(uri, auth=(user, password))
             driver.verify_connectivity()
-            print(f"\n[✅ SUCCESS] Successfully connected and authenticated with Neo4j!")
+            print(f"\n[SUCCESS] Successfully connected and authenticated with Neo4j!")
             driver.close()
             return
         except Exception as e:
-            print(f"[⚠️ WARNING] Attempt {attempt} failed: {e}")
+            print(f"[WARNING] Attempt {attempt} failed: {e}")
             if attempt < max_retries:
                 print(f"Waiting {retry_delay} seconds for Neo4j to finish booting...\n")
                 time.sleep(retry_delay)
             else:
-                print(f"\n[❌ FAILED] Could not connect after {max_retries} attempts.")
+                print(f"\n[FAILED] Could not connect after {max_retries} attempts.")
                 print("\n💡 TROUBLESHOOTING:")
                 print("1. Neo4j might still be starting up (it can take 60+ seconds).")
                 print("2. Run 'docker logs -f hve-neo4j' and wait for 'Remote interface available'.")

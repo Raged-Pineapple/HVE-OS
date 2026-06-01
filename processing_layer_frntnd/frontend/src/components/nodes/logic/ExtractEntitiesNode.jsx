@@ -359,9 +359,8 @@ export default memo(({ id, data, selected }) => {
                     </div>
                     {pinnedEntities.map((entity, idx) => {
                       const name = getEntityName(entity, data.displayNameProperty);
-                      const uniqueId = entity._hve_id != null ? `hve_${entity._hve_id}` : entity.hve_id != null ? `hve_${entity.hve_id}` : entity.id != null ? `id_${entity.id}` : `idx_${idx}`;
                       return (
-                        <div key={`pinned-${uniqueId}-${name}`} style={{ 
+                        <div key={`pinned-${name}-${idx}`} style={{ 
                           position: 'relative', 
                           background: 'var(--bg-elevated)', 
                           padding: '4px 8px', 
@@ -378,7 +377,7 @@ export default memo(({ id, data, selected }) => {
                           </span>
                           <Handle 
                             type="source" 
-                            id={`entity-out-pinned-${uniqueId}::${name}`}
+                            id={`entity-out-pinned-${name}`}
                             position={Position.Right} 
                             style={{ right: -6, background: 'var(--cyan)', width: 10, height: 10, border: '2px solid var(--bg-surface)', zIndex: 10 }}
                           />
@@ -398,9 +397,8 @@ export default memo(({ id, data, selected }) => {
                     </div>
                     {unpinned.slice(0, 10).map((entity, idx) => {
                       const name = getEntityName(entity, data.displayNameProperty);
-                      const uniqueId = entity._hve_id != null ? `hve_${entity._hve_id}` : entity.hve_id != null ? `hve_${entity.hve_id}` : entity.id != null ? `id_${entity.id}` : `idx_${idx}`;
                       return (
-                        <div key={`unpinned-${uniqueId}-${name}`} style={{ 
+                        <div key={`unpinned-${name}-${idx}`} style={{ 
                           position: 'relative', 
                           background: 'var(--bg-elevated)', 
                           padding: '4px 8px', 
@@ -416,7 +414,7 @@ export default memo(({ id, data, selected }) => {
                           </span>
                           <Handle 
                             type="source" 
-                            id={`entity-out-${uniqueId}::${name}`}
+                            id={`entity-out-${name}`}
                             position={Position.Right} 
                             style={{ right: -6, background: 'var(--cyan)', width: 10, height: 10, border: '2px solid var(--bg-surface)', zIndex: 10 }}
                           />

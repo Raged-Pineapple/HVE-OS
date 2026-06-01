@@ -20,7 +20,7 @@ const nodeTypes = getNodeTypes();
 
 const getId = () => `node_${crypto.randomUUID()}`;
 
-const LogicGraphTab = () => {
+const LogicGraphTab = ({ isVisible }) => {
   const reactFlowWrapper = useRef(null);
   const wsRef = useRef(null);
 
@@ -37,6 +37,18 @@ const LogicGraphTab = () => {
   const [isWsConnected, setIsWsConnected] = useState(false);
   const lastSentGraph = useRef('');
   const reconnectTimeout = useRef(null);
+
+  const nodesRef = useRef(nodes);
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
+  const [shouldRenderFlow, setShouldRenderFlow] = useState(false);
+  useEffect(() => {
+    if (isVisible) {
+      setShouldRenderFlow(true);
+    }
+  }, [isVisible]);
 
   useEffect(() => {
     const connectWs = () => {
@@ -63,6 +75,18 @@ const LogicGraphTab = () => {
           
           if (message.type === 'node_output') {
             const { nodeId, outputs, success, error, metadata, sourceId } = message;
+            
+            // Intercept MapNode to sync coordinates with Geospatial Map
+            const targetNode = nodesRef.current.find(n => n.id === nodeId);
+            if (targetNode?.type === 'mapNode' && success && Array.isArray(outputs?.data)) {
+              localStorage.setItem('hve_world_map_points', JSON.stringify(outputs.data));
+              if (targetNode.data?.trackingBoundary) {
+                localStorage.setItem('hve_world_map_tracking_boundary', targetNode.data.trackingBoundary);
+                window.dispatchEvent(new CustomEvent('map-config-updated', { detail: { trackingBoundary: targetNode.data.trackingBoundary } }));
+              }
+              window.dispatchEvent(new CustomEvent('map-points-updated', { detail: outputs.data }));
+            }
+
             setNodes((nds) =>
               nds.map((node) => {
                 if (node.id === nodeId) {
@@ -73,13 +97,30 @@ const LogicGraphTab = () => {
                     return node;
                   }
 
+                  const cleanedData = { ...node.data };
+                  Object.keys(cleanedData).forEach(k => {
+                    if (
+                      k.startsWith('entity-out-') ||
+                      k.startsWith('attr-out-') ||
+                      k.startsWith('combine-out-') ||
+                      k.startsWith('resolvedEntity_') ||
+                      [
+                        'data', 'extracted', 'pinned', 'unpinned',
+                        'resolvedEntity', 'success', 'error', 'metadata',
+                        'keys', 'count', 'columns', 'row_count', 'pinned_count', 'unpinned_count'
+                      ].includes(k)
+                    ) {
+                      delete cleanedData[k];
+                    }
+                  });
+
                   return {
                     ...node,
                     data: {
-                      ...node.data,
+                      ...cleanedData,
                       ...(sourceId && outputs?.keys ? { keys: outputs.keys, count: outputs.count, data: outputs.data } : {}),
                       ...(outputs || {}),
-                      metadata: metadata || node.data.metadata,
+                      metadata: metadata || cleanedData.metadata,
                       success,
                       error
                     }
@@ -188,12 +229,22 @@ const LogicGraphTab = () => {
         model_info,
         isTraining,
         metadata,
+        pinned_count,
+        unpinned_count,
+        high_risk,
+        medium_risk,
+        low_risk,
         ...config
       } = data || {};
       
       // Strip any dynamic handles/outputs to prevent infinite loops when data changes
       Object.keys(config).forEach(k => {
-        if (k.startsWith('entity-out-') || k.startsWith('attr-out-')) {
+        if (
+          k.startsWith('entity-out-') ||
+          k.startsWith('attr-out-') ||
+          k.startsWith('combine-out-') ||
+          k.startsWith('resolvedEntity_')
+        ) {
           delete config[k];
         }
       });
@@ -395,59 +446,61 @@ const LogicGraphTab = () => {
       <ReactFlowProvider>
         <Sidebar onInjectNode={onInjectNode} />
         <div className="reactflow-wrapper" ref={reactFlowWrapper} style={{ flexGrow: 1, height: '100%' }}>
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            onInit={setReactFlowInstance}
-            onDrop={onDrop}
-            onDragOver={onDragOver}
-            onNodeDoubleClick={onNodeDoubleClick}
-            nodeTypes={nodeTypes}
-            deleteKeyCode={['Backspace', 'Delete']}
-            panOnDrag={[1, 2]}
-            selectionOnDrag={true}
-            selectionMode="partial"
-            selectionKeyCode={null}
-            connectionLineType="smoothstep"
-            defaultEdgeOptions={{ type: 'smoothstep' }}
-            fitView
-          >
-            <Controls />
-            <Background color="var(--text-muted)" gap={16} />
-            <div style={{
-              position: 'absolute',
-              top: 10,
-              right: 10,
-              zIndex: 10,
-              display: 'flex',
-              gap: 8
-            }}>
+          {shouldRenderFlow && (
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              onInit={setReactFlowInstance}
+              onDrop={onDrop}
+              onDragOver={onDragOver}
+              onNodeDoubleClick={onNodeDoubleClick}
+              nodeTypes={nodeTypes}
+              deleteKeyCode={['Backspace', 'Delete']}
+              panOnDrag={[1, 2]}
+              selectionOnDrag={true}
+              selectionMode="partial"
+              selectionKeyCode={null}
+              connectionLineType="smoothstep"
+              defaultEdgeOptions={{ type: 'smoothstep' }}
+              fitView
+            >
+              <Controls />
+              <Background color="var(--text-muted)" gap={16} />
               <div style={{
+                position: 'absolute',
+                top: 10,
+                right: 10,
+                zIndex: 10,
                 display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '8px 12px',
-                background: 'var(--bg-elevated)',
-                borderRadius: 6,
-                fontSize: '0.75rem',
-                fontWeight: 600,
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border-color)'
+                gap: 8
               }}>
                 <div style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  background: isWsConnected ? 'var(--accent-teal)' : '#ef4444',
-                  boxShadow: isWsConnected ? '0 0 8px var(--accent-teal)' : 'none'
-                }} />
-                {isWsConnected ? 'Live Graph Active' : 'Disconnected'}
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '8px 12px',
+                  background: 'var(--bg-elevated)',
+                  borderRadius: 6,
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border-color)'
+                }}>
+                  <div style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    background: isWsConnected ? 'var(--accent-teal)' : '#ef4444',
+                    boxShadow: isWsConnected ? '0 0 8px var(--accent-teal)' : 'none'
+                  }} />
+                  {isWsConnected ? 'Live Graph Active' : 'Disconnected'}
+                </div>
               </div>
-            </div>
-          </ReactFlow>
+            </ReactFlow>
+          )}
         </div>
         {selectedNode && (
           <SettingsPanel 
@@ -463,10 +516,10 @@ const LogicGraphTab = () => {
   );
 };
 
-export default function ProcessingPage() {
+export default function ProcessingPage({ isVisible }) {
   return (
     <div style={{ height: '100%', width: '100%' }}>
-      <LogicGraphTab />
+      <LogicGraphTab isVisible={isVisible} />
     </div>
   );
 }

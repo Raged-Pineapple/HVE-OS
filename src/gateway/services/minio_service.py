@@ -14,7 +14,7 @@ from minio.error import S3Error
 logger = logging.getLogger(__name__)
 
 # MinIO Configuration
-MINIO_URL = os.getenv("MINIO_URL", "localhost:9000")
+MINIO_URL = os.getenv("MINIO_URL", "127.0.0.1:9000")
 MINIO_USER = os.getenv("MINIO_ROOT_USER", "hve_admin")
 MINIO_PASS = os.getenv("MINIO_ROOT_PASSWORD", "hve_password123")
 

@@ -8,10 +8,10 @@ from neo4j import GraphDatabase
 
 logger = logging.getLogger(__name__)
 
-# Configuration
-NEO4J_URI = os.getenv("NEO4J_URI", "neo4j://localhost:7687")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "hve_password123")
+# Configuration defaults (fallbacks)
+NEO4J_URI = "neo4j://localhost:7687"
+NEO4J_USER = "neo4j"
+NEO4J_PASSWORD = "hve_password123"
 
 class Neo4jService:
     """
@@ -21,18 +21,30 @@ class Neo4jService:
     _driver = None
 
     def __init__(self):
+        self.ensure_connected()
+
+    def ensure_connected(self) -> bool:
+        """
+        Ensures that the Neo4j driver is initialized and connected.
+        Retries connection dynamically using the latest env values if driver is None.
+        """
         if Neo4jService._driver is None:
             try:
-                Neo4jService._driver = GraphDatabase.driver(
-                    NEO4J_URI, 
-                    auth=(NEO4J_USER, NEO4J_PASSWORD)
-                )
-                # Verify connectivity
-                Neo4jService._driver.verify_connectivity()
-                logger.info(f"Successfully connected to Neo4j at {NEO4J_URI}")
+                # Load connection settings dynamically from environment variables
+                uri = os.getenv("NEO4J_URI", NEO4J_URI)
+                user = os.getenv("NEO4J_USER", NEO4J_USER)
+                pwd = os.getenv("NEO4J_PASSWORD", NEO4J_PASSWORD)
+                
+                logger.info(f"Attempting to initialize Neo4j driver at {uri}...")
+                driver = GraphDatabase.driver(uri, auth=(user, pwd))
+                driver.verify_connectivity()
+                
+                Neo4jService._driver = driver
+                logger.info(f"Successfully connected to Neo4j at {uri}")
             except Exception as e:
                 logger.error(f"Failed to connect to Neo4j: {e}")
                 Neo4jService._driver = None
+        return Neo4jService._driver is not None
 
     def close(self):
         if Neo4jService._driver:
@@ -45,7 +57,7 @@ class Neo4jService:
         Executes a query and returns the results as a list of dicts.
         Consumes the result within the session context to prevent ResultConsumedError.
         """
-        if not Neo4jService._driver:
+        if not self.ensure_connected():
             logger.error("Neo4j driver not initialized.")
             return []
         
@@ -62,7 +74,7 @@ class Neo4jService:
         Executes a write query (MERGE/CREATE/SET) in a transaction.
         Use this for idempotent upserts.
         """
-        if not Neo4jService._driver:
+        if not self.ensure_connected():
             logger.error("Neo4j driver not initialized.")
             return None
             
@@ -131,7 +143,7 @@ class Neo4jService:
 
     def delete_source_nodes(self, source_id: str):
         """Removes a source node and all entities associated with it using batched transactions."""
-        if not Neo4jService._driver:
+        if not self.ensure_connected():
             return
             
         # We delete in batches to avoid transaction log overflow
@@ -162,7 +174,7 @@ class Neo4jService:
 
     def wipe_graph(self):
         """NUCLEAR: Deletes all nodes and relationships."""
-        if not Neo4jService._driver:
+        if not self.ensure_connected():
             logger.error("Neo4j driver not initialized.")
             return
         self.execute_write("MATCH (n) DETACH DELETE n")

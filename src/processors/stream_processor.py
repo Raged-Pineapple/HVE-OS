@@ -35,7 +35,7 @@ from gateway.services.kafka_service import SILVER_TOPIC
 logger = logging.getLogger(__name__)
 
 # Configuration
-KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:9094")
+KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "127.0.0.1:9094")
 RAW_TOPIC = "raw-telemetry"
 CONSUMER_GROUP = "hve-stream-processor-v2"
 BATCH_SIZE = 100          # Messages per batch

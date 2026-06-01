@@ -50,6 +50,108 @@ async def broadcast(message: dict):
             clients.discard(client)
 
 
+def _parse_nested_literal(value) -> any:
+    if isinstance(value, str):
+        if value.strip().startswith('{') or value.strip().startswith('['):
+            try:
+                import json
+                return json.loads(value)
+            except Exception:
+                try:
+                    import ast
+                    return ast.literal_eval(value)
+                except Exception:
+                    pass
+    return value
+
+
+def _get_entity_name(entity: dict, display_property: str) -> str:
+    def _get_fallback_name(ent: dict) -> str:
+        for k in ['name', 'title', 'id', '_hve_id']:
+            val = ent.get(k)
+            if val is not None and str(val).strip():
+                return str(val).strip()
+        return 'Unknown'
+
+    if not display_property:
+        return _get_fallback_name(entity)
+    
+    parts = display_property.split('.')
+    current = entity
+    for part in parts:
+        if current is None:
+            break
+        current = _parse_nested_literal(current)
+        if isinstance(current, dict):
+            current = current.get(part)
+    
+    if current is not None and not isinstance(current, (dict, list)):
+        str_val = str(current).strip()
+        if str_val:
+            return str_val
+    
+    return _get_fallback_name(entity)
+
+
+def _resolve_dynamic_input(src_node: dict, src_outputs: dict, src_handle: str) -> tuple[bool, any]:
+    # 1. Direct match first
+    if src_handle in src_outputs:
+        return True, src_outputs[src_handle]
+
+    # 2. Check if handle is a dynamic entity output handle
+    if src_handle and isinstance(src_handle, str) and src_handle.startswith("entity-out-"):
+        specific_name = src_handle
+        if specific_name.startswith("entity-out-pinned-"):
+            specific_name = specific_name[len("entity-out-pinned-"):]
+        else:
+            specific_name = specific_name[len("entity-out-"):]
+
+        specific_id = None
+        if "::" in specific_name:
+            parts = specific_name.split("::", 1)
+            specific_id = parts[0]
+            specific_name = parts[1]
+
+        # Gather all candidate entities from the source outputs
+        candidates = []
+        for key in ["extracted", "pinned", "unpinned", "data"]:
+            val = src_outputs.get(key)
+            if isinstance(val, list):
+                candidates.extend(val)
+            elif isinstance(val, dict):
+                candidates.append(val)
+
+        display_property = ""
+        if src_node and isinstance(src_node, dict):
+            display_property = src_node.get("data", {}).get("displayNameProperty", "")
+
+        # Find a match in candidates
+        for idx, e in enumerate(candidates):
+            if not isinstance(e, dict):
+                continue
+
+            e_unique_id = None
+            if e.get('_hve_id') is not None:
+                e_unique_id = f"hve_{e['_hve_id']}"
+            elif e.get('hve_id') is not None:
+                e_unique_id = f"hve_{e['hve_id']}"
+            elif e.get('id') is not None:
+                e_unique_id = f"id_{e['id']}"
+            else:
+                e_unique_id = f"idx_{idx}"
+
+            if specific_id is not None and e_unique_id == specific_id:
+                return True, e
+
+            name = _get_entity_name(e, display_property)
+            if name == specific_name:
+                return True, e
+
+    # 3. Fallback to default/data matching
+    if 'data' in src_outputs:
+        return True, src_outputs['data']
+
+    return False, None
 
 
 class ReactiveGraphEngine:
@@ -130,11 +232,12 @@ class ReactiveGraphEngine:
                     src_handle = edge.get('sourceHandle', 'data')
                     tgt_handle = edge.get('targetHandle', 'data')
                     
+                    src_node = self.nodes.get(src_id)
                     src_outputs = self.outputs.get(src_id, {})
-                    if src_handle in src_outputs:
-                        inputs[tgt_handle] = src_outputs[src_handle]
-                    elif 'data' in src_outputs:
-                        inputs[tgt_handle] = src_outputs['data']
+                    
+                    found, resolved_val = _resolve_dynamic_input(src_node, src_outputs, src_handle)
+                    if found:
+                        inputs[tgt_handle] = resolved_val
                 
                 # Inject the cancel signal into config so long-running nodes
                 # (e.g. RelationshipMappingNode) can abort their inner for-loop
@@ -283,12 +386,14 @@ def start_executor():
     try:
         from services import event_service
         
-        def handle_source_update(payload):
+        def handle_source_update(event_type, data):
+            if event_type != "source_update":
+                return
             # Safely handle both string payloads or dictionary payloads
-            source_id = payload.get("source_id") if isinstance(payload, dict) else str(payload)
+            source_id = data.get("source_id") if isinstance(data, dict) else str(data)
             logger.info(f"Graph engine caught source_update event for: {source_id}")
             trigger_graph_execution(is_data_update=True, source_id=source_id)
             
-        event_service.subscribe("source_update", handle_source_update)
+        event_service.subscribe(handle_source_update)
     except Exception as e:
         logger.error(f"Failed to subscribe Reactive Graph Engine to events: {e}")

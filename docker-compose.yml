@@ -32,7 +32,8 @@ services:
       AWS_ACCESS_KEY_ID: hve_admin
       AWS_SECRET_ACCESS_KEY: hve_password123
       AWS_REGION: us-east-1
-      CATALOG_JDBC_URI: jdbc:postgresql://postgres:5432/hve_control_plane
+      # PRIMARY connection string — tabulario/iceberg-rest reads CATALOG_URI, not CATALOG_JDBC_URI
+      CATALOG_URI: jdbc:postgresql://postgres:5432/hve_control_plane
       CATALOG_JDBC_USER: hve_admin
       CATALOG_JDBC_PASSWORD: hve_password123
       CATALOG_CATALOG__IMPL: org.apache.iceberg.jdbc.JdbcCatalog

@@ -238,7 +238,7 @@ class ExtractEntitiesNode(BaseNode):
                 unique_id = f"idx_{idx}"
             
             is_pinned = name in pinned_names
-            out_handle = f"entity-out-pinned-{unique_id}::{name}" if is_pinned else f"entity-out-{unique_id}::{name}"
+            out_handle = f"entity-out-pinned-{name}" if is_pinned else f"entity-out-{name}"
             
             out_entity = entity
             is_connected = out_handle in connected_handles

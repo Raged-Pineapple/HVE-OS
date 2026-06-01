@@ -27,6 +27,7 @@ export default function StatusBar({ activePage, onNavigate, theme, onToggleTheme
   const navItems = [
     { id: 'ingestion', label: 'Ingestion', icon: '⬇' },
     { id: 'processing', label: 'Processing', icon: '⚙' },
+    { id: 'output', label: 'Output', icon: '🌐' },
   ];
 
   return (
